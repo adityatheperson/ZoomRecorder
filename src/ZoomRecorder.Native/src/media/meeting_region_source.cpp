@@ -1,4 +1,5 @@
 #include "meeting_region_source.h"
+#include "capture_crop.h"
 
 #include <d3d11.h>
 #include <windows.graphics.capture.interop.h>
@@ -44,21 +45,53 @@ class MeetingRegionSourceImpl {
 
   bool start() {
     if (!IsWindow(target_)) { health_(false, "Zoom meeting window is unavailable"); return false; }
+    capture_window_ = GetAncestor(target_, GA_ROOT);
+    if (!capture_window_ || capture_window_ == target_) { health_(false, "Zoom meeting host must be embedded in an app window"); return false; }
     if (!capture::GraphicsCaptureSession::IsSupported()) { health_(false, "Windows Graphics Capture is not supported or is disabled"); return false; }
     try {
       // WinUI invokes us on its existing STA thread. Reinitializing it as MTA
       // fails with RPC_E_CHANGED_MODE; Windows Graphics Capture supports the
       // existing apartment and CreateFreeThreaded handles frame delivery.
       device_ = make_device();
-      item_ = item_for_window(target_);
+      item_ = item_for_window(capture_window_);
       pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, item_.Size());
       frame_token_ = pool_.FrameArrived([this](auto const& sender, auto const&) {
         if (auto frame = sender.TryGetNextFrame()) {
           auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
           com_ptr<ID3D11Texture2D> texture;
           if (SUCCEEDED(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
+            D3D11_TEXTURE2D_DESC source_description{};
+            texture->GetDesc(&source_description);
+            RECT target_bounds{}, capture_bounds{};
+            CaptureCrop crop{};
+            if (!GetWindowRect(target_, &target_bounds) || !GetWindowRect(capture_window_, &capture_bounds) ||
+                !calculate_capture_crop(target_bounds, capture_bounds, source_description.Width, source_description.Height, crop)) {
+              health_(false, "Meeting area is outside the capturable app window");
+              return;
+            }
+            if (!cropped_ || crop.width != crop_width_ || crop.height != crop_height_) {
+              D3D11_TEXTURE2D_DESC cropped_description = source_description;
+              cropped_description.Width = crop.width;
+              cropped_description.Height = crop.height;
+              cropped_description.MipLevels = 1;
+              cropped_description.ArraySize = 1;
+              cropped_description.Usage = D3D11_USAGE_DEFAULT;
+              cropped_description.CPUAccessFlags = 0;
+              cropped_description.MiscFlags = 0;
+              com_ptr<ID3D11Device> native_device;
+              texture->GetDevice(native_device.put());
+              if (FAILED(native_device->CreateTexture2D(&cropped_description, nullptr, cropped_.put()))) {
+                health_(false, "Meeting video crop texture could not be created");
+                return;
+              }
+              native_device->GetImmediateContext(context_.put());
+              crop_width_ = crop.width;
+              crop_height_ = crop.height;
+            }
+            const D3D11_BOX source_box{crop.left, crop.top, 0, crop.left + crop.width, crop.top + crop.height, 1};
+            context_->CopySubresourceRegion(cropped_.get(), 0, 0, 0, 0, texture.get(), 0, &source_box);
             const auto now = std::chrono::steady_clock::now().time_since_epoch();
-            frame_(texture.get(), std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
+            frame_(cropped_.get(), std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
           }
           if (!ready_.exchange(true)) health_(true, "Meeting video ready");
         }
@@ -85,12 +118,14 @@ class MeetingRegionSourceImpl {
     if (pool_) pool_.FrameArrived(frame_token_);
     if (session_) session_.Close();
     if (pool_) pool_.Close();
-    session_ = nullptr; pool_ = nullptr; item_ = nullptr; device_ = nullptr; ready_ = false;
+    session_ = nullptr; pool_ = nullptr; item_ = nullptr; device_ = nullptr; cropped_ = nullptr; context_ = nullptr;
+    crop_width_ = crop_height_ = 0; capture_window_ = nullptr; ready_ = false;
   }
   bool is_ready() const { return ready_; }
 
  private:
   HWND target_{};
+  HWND capture_window_{};
   MeetingRegionSource::FrameCallback frame_;
   MeetingRegionSource::HealthCallback health_;
   std::atomic_bool ready_{};
@@ -98,6 +133,10 @@ class MeetingRegionSourceImpl {
   capture::GraphicsCaptureItem item_{nullptr};
   capture::Direct3D11CaptureFramePool pool_{nullptr};
   capture::GraphicsCaptureSession session_{nullptr};
+  com_ptr<ID3D11Texture2D> cropped_;
+  com_ptr<ID3D11DeviceContext> context_;
+  UINT crop_width_{};
+  UINT crop_height_{};
   event_token frame_token_{};
 };
 
