@@ -9,6 +9,28 @@
 #include <mutex>
 #include <vector>
 #include <chrono>
+#include <algorithm>
+
+namespace {
+std::vector<float> normalize_audio(std::span<const float> input, unsigned rate, unsigned short channels) {
+  if (input.empty() || rate == 0 || channels == 0) return {};
+  const auto input_frames = input.size() / channels;
+  const auto output_frames = static_cast<size_t>((static_cast<unsigned long long>(input_frames) * 48000) / rate);
+  std::vector<float> output(output_frames * 2);
+  for (size_t frame = 0; frame < output_frames; ++frame) {
+    const auto source_position = static_cast<double>(frame) * rate / 48000.0;
+    const auto first = (std::min)(static_cast<size_t>(source_position), input_frames - 1);
+    const auto second = (std::min)(first + 1, input_frames - 1);
+    const auto fraction = static_cast<float>(source_position - first);
+    for (size_t channel = 0; channel < 2; ++channel) {
+      const auto source_channel = channels == 1 ? 0 : (std::min)(channel, static_cast<size_t>(channels - 1));
+      const auto a = input[first * channels + source_channel], b = input[second * channels + source_channel];
+      output[frame * 2 + channel] = a + ((b - a) * fraction);
+    }
+  }
+  return output;
+}
+}
 
 class RecordingPipelineImpl {
  public:
@@ -43,9 +65,9 @@ class RecordingPipelineImpl {
 
  private:
   void audio(bool microphone, std::span<const float> samples, unsigned rate, unsigned short channels, std::int64_t time) {
-    if (rate != 48000 || channels != 2) { component_health(microphone ? RecordingComponent::Microphone : RecordingComponent::MeetingAudio, false, "Audio device must support 48 kHz stereo"); return; }
     std::scoped_lock lock(audio_mutex_);
-    auto& target = microphone ? microphone_buffer_ : meeting_buffer_; target.assign(samples.begin(), samples.end());
+    auto& target = microphone ? microphone_buffer_ : meeting_buffer_; target = normalize_audio(samples, rate, channels);
+    if (target.empty()) { component_health(microphone ? RecordingComponent::Microphone : RecordingComponent::MeetingAudio, false, "Audio conversion failed"); return; }
     if (meeting_buffer_.empty() || microphone_buffer_.empty()) return;
     auto mixed = mixer_.mix(meeting_buffer_, microphone_buffer_); meeting_buffer_.clear(); microphone_buffer_.clear();
     std::scoped_lock writer_lock(writer_mutex_); if (!writer_.write_audio(mixed, time)) fail("Audio encoder stopped");
