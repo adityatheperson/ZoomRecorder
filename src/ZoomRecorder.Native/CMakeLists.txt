@@ -3,11 +3,11 @@ project(ZoomRecorderNative LANGUAGES CXX)
 enable_testing()
 option(ZR_WITH_ZOOM "Build the licensed Zoom Meeting SDK adapter" OFF)
 
-add_library(ZoomRecorder.Native SHARED src/api.cpp src/zoom/zoom_event_mapper.cpp src/media/audio_mixer.cpp src/media/recording_readiness.cpp src/media/meeting_region_source.cpp src/media/wasapi_source.cpp)
+add_library(ZoomRecorder.Native SHARED src/api.cpp src/zoom/zoom_event_mapper.cpp src/media/audio_mixer.cpp src/media/recording_readiness.cpp src/media/meeting_region_source.cpp src/media/wasapi_source.cpp src/media/mp4_writer.cpp src/media/recording_pipeline.cpp)
 target_compile_features(ZoomRecorder.Native PRIVATE cxx_std_20)
 target_include_directories(ZoomRecorder.Native PUBLIC include)
 target_compile_definitions(ZoomRecorder.Native PRIVATE UNICODE _UNICODE)
-target_link_libraries(ZoomRecorder.Native PRIVATE d3d11 windowsapp ole32)
+target_link_libraries(ZoomRecorder.Native PRIVATE d3d11 windowsapp ole32 mfplat mfreadwrite mfuuid)
 
 if(ZR_WITH_ZOOM)
   if(NOT DEFINED ENV{ZOOM_MEETING_SDK_DIR})

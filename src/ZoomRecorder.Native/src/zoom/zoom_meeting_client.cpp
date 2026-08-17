@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "auth_service_interface.h"
 #include "meeting_service_interface.h"
+#include "meeting_service_components/meeting_ui_ctrl_interface.h"
 #include "zoom_sdk.h"
 
 #include <cctype>
@@ -77,6 +78,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
     enter_requested_ = true;
     return authenticated_ ? join() : 0;
   }
+  void set_host(HWND host) { host_ = host; }
 
   void onAuthenticationReturn(AuthResult result) override {
     if (result != AUTHRET_SUCCESS) { sink_(R"({"type":"failed","component":"zoom_authentication"})"); return; }
@@ -93,7 +95,8 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void onMeetingStatusChanged(MeetingStatus status, int result) override {
     switch (status) {
       case MEETING_STATUS_CONNECTING: sink_(R"({"type":"meeting_connecting"})"); break;
-      case MEETING_STATUS_INMEETING: sink_(R"({"type":"meeting_entered"})"); break;
+      case MEETING_STATUS_INMEETING:
+        attach_meeting_window(); sink_(R"({"type":"meeting_entered"})"); break;
       case MEETING_STATUS_ENDED:
         if (!ended_) { ended_ = true; sink_(R"({"type":"meeting_ended"})"); }
         break;
@@ -111,6 +114,15 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void onAppSignalPanelUpdated(IMeetingAppSignalHandler*) override {}
 
  private:
+  void attach_meeting_window() {
+    if (!host_ || !meeting_) return;
+    auto* ui = meeting_->GetUIController(); if (!ui) return;
+    HWND first{}, second{}; if (ui->GetMeetingUIWnd(first, second) != SDKERR_SUCCESS || !first) return;
+    SetParent(first, host_);
+    SetWindowLongPtrW(first, GWL_STYLE, (GetWindowLongPtrW(first, GWL_STYLE) | WS_CHILD) & ~WS_POPUP);
+    RECT bounds{}; GetClientRect(host_, &bounds); MoveWindow(first, 0, 0, bounds.right, bounds.bottom, TRUE);
+    ShowWindow(first, SW_SHOW);
+  }
   int join() {
     if (join_called_) return 2;
     unsigned long long meeting_number{};
@@ -132,9 +144,11 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   IMeetingService* meeting_{};
   std::wstring meeting_id_, passcode_, display_name_, jwt_;
   bool initialized_{}, authenticated_{}, enter_requested_{}, join_called_{}, ended_{};
+  HWND host_{};
 };
 
 ZoomMeetingClient::ZoomMeetingClient(EventSink sink) : impl_(std::make_unique<ZoomMeetingClientImpl>(std::move(sink))) {}
 ZoomMeetingClient::~ZoomMeetingClient() = default;
 int ZoomMeetingClient::prepare(const std::string& json) { return impl_->prepare(json); }
 int ZoomMeetingClient::enter() { return impl_->enter(); }
+void ZoomMeetingClient::set_host(HWND host) { impl_->set_host(host); }

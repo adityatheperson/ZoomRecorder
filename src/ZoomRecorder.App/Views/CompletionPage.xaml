@@ -5,11 +5,13 @@
     <Grid>
         <StackPanel Width="520" Spacing="14" HorizontalAlignment="Center" VerticalAlignment="Center">
             <TextBlock Text="Recording saved" Style="{ThemeResource TitleTextBlockStyle}" />
-            <TextBlock Text="meeting.mp4 · 42:00 · 50.0 MB" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                <Run Text="{Binding FileName}" /><Run Text=" · " /><Run Text="{Binding DurationText}" /><Run Text=" · " /><Run Text="{Binding FileSizeText}" />
+            </TextBlock>
             <StackPanel Orientation="Horizontal" Spacing="10">
-                <Button Content="Open recording" Style="{ThemeResource AccentButtonStyle}" />
-                <Button Content="Open folder" />
-                <Button Content="Done" />
+                <Button Content="Open recording" Style="{ThemeResource AccentButtonStyle}" Click="OpenRecording" />
+                <Button Content="Open folder" Click="OpenFolder" />
+                <Button Content="Done" Click="Done" />
             </StackPanel>
         </StackPanel>
     </Grid>

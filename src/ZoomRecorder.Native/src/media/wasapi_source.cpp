@@ -7,6 +7,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <chrono>
 
 using Microsoft::WRL::ComPtr;
 
@@ -62,7 +63,8 @@ class WasapiSourceImpl {
         } else if (format->wBitsPerSample == 16) {
           auto* input = reinterpret_cast<const short*>(bytes); for (size_t i = 0; i < converted.size(); ++i) converted[i] = input[i] / 32768.0f;
         } else { capture->ReleaseBuffer(frames); fail("Unsupported audio device format"); cleanup(); return; }
-        samples_(converted, format->nSamplesPerSec, format->nChannels);
+        const auto now = std::chrono::steady_clock::now().time_since_epoch();
+        samples_(converted, format->nSamplesPerSec, format->nChannels, std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
         if (!ready_.exchange(true)) health_(true, loopback_ ? "Meeting audio ready" : "Microphone ready");
         capture->ReleaseBuffer(frames); if (FAILED(capture->GetNextPacketSize(&packets))) packets = 0;
       }

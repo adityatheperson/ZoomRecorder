@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <windows.h>
 
 class ZoomMeetingClientImpl;
 
@@ -13,6 +14,7 @@ class ZoomMeetingClient {
   ~ZoomMeetingClient();
   int prepare(const std::string& request_json);
   int enter();
+  void set_host(HWND host);
  private:
   std::unique_ptr<ZoomMeetingClientImpl> impl_;
 };

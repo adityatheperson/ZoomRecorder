@@ -1,6 +1,8 @@
 #pragma once
 
 #include <windows.h>
+#include <d3d11.h>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -9,7 +11,8 @@ class MeetingRegionSourceImpl;
 class MeetingRegionSource {
  public:
   using HealthCallback = std::function<void(bool, const char*)>;
-  MeetingRegionSource(HWND target, HealthCallback health);
+  using FrameCallback = std::function<void(ID3D11Texture2D*, std::int64_t)>;
+  MeetingRegionSource(HWND target, FrameCallback frame, HealthCallback health);
   ~MeetingRegionSource();
   bool start();
   void stop();

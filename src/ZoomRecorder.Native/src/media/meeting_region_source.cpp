@@ -9,6 +9,7 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <winrt/base.h>
 #include <atomic>
+#include <chrono>
 
 using namespace winrt;
 namespace capture = winrt::Windows::Graphics::Capture;
@@ -37,8 +38,8 @@ capture::GraphicsCaptureItem item_for_window(HWND window) {
 
 class MeetingRegionSourceImpl {
  public:
-  MeetingRegionSourceImpl(HWND target, MeetingRegionSource::HealthCallback health)
-      : target_(target), health_(std::move(health)) {}
+  MeetingRegionSourceImpl(HWND target, MeetingRegionSource::FrameCallback frame, MeetingRegionSource::HealthCallback health)
+      : target_(target), frame_(std::move(frame)), health_(std::move(health)) {}
 
   bool start() {
     if (!IsWindow(target_)) { health_(false, "Zoom meeting window is unavailable"); return false; }
@@ -49,6 +50,12 @@ class MeetingRegionSourceImpl {
       pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, item_.Size());
       frame_token_ = pool_.FrameArrived([this](auto const& sender, auto const&) {
         if (auto frame = sender.TryGetNextFrame()) {
+          auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+          com_ptr<ID3D11Texture2D> texture;
+          if (SUCCEEDED(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
+            const auto now = std::chrono::steady_clock::now().time_since_epoch();
+            frame_(texture.get(), std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
+          }
           if (!ready_.exchange(true)) health_(true, "Meeting video ready");
         }
       });
@@ -73,6 +80,7 @@ class MeetingRegionSourceImpl {
 
  private:
   HWND target_{};
+  MeetingRegionSource::FrameCallback frame_;
   MeetingRegionSource::HealthCallback health_;
   std::atomic_bool ready_{};
   direct3d::IDirect3DDevice device_{nullptr};
@@ -82,8 +90,8 @@ class MeetingRegionSourceImpl {
   event_token frame_token_{};
 };
 
-MeetingRegionSource::MeetingRegionSource(HWND target, HealthCallback health)
-    : impl_(std::make_unique<MeetingRegionSourceImpl>(target, std::move(health))) {}
+MeetingRegionSource::MeetingRegionSource(HWND target, FrameCallback frame, HealthCallback health)
+    : impl_(std::make_unique<MeetingRegionSourceImpl>(target, std::move(frame), std::move(health))) {}
 MeetingRegionSource::~MeetingRegionSource() { impl_->stop(); }
 bool MeetingRegionSource::start() { return impl_->start(); }
 void MeetingRegionSource::stop() { impl_->stop(); }

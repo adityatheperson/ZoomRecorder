@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 #ifdef ZOOMRECORDER_NATIVE_EXPORTS
 #define ZR_API __declspec(dllexport)
@@ -15,6 +16,7 @@ enum zr_result { ZR_OK = 0, ZR_INVALID_ARGUMENT = 1, ZR_INVALID_STATE = 2, ZR_IN
 ZR_API zr_result zr_create(zr_handle* out_handle);
 ZR_API zr_result zr_destroy(zr_handle handle);
 ZR_API zr_result zr_set_event_callback(zr_handle handle, zr_event_callback callback, void* context);
+ZR_API zr_result zr_set_meeting_host(zr_handle handle, intptr_t window_handle);
 ZR_API zr_result zr_prepare_meeting(zr_handle handle, const char* request_json);
 ZR_API zr_result zr_start_recording(zr_handle handle, const wchar_t* output_path);
 ZR_API zr_result zr_enter_meeting(zr_handle handle);

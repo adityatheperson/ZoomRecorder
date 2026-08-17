@@ -28,6 +28,7 @@ internal sealed class NativeSession : IDisposable
         var payload = JsonSerializer.Serialize(new { request.MeetingId, request.Passcode, request.DisplayName, Jwt = jwt });
         ThrowIfFailed(NativeMethods.zr_prepare_meeting(handle.DangerousGetHandle(), payload));
     }
+    public void SetMeetingHost(nint windowHandle) => ThrowIfFailed(NativeMethods.zr_set_meeting_host(handle.DangerousGetHandle(), windowHandle));
     public void StartRecording(string path) => ThrowIfFailed(NativeMethods.zr_start_recording(handle.DangerousGetHandle(), path));
     public void Enter() => ThrowIfFailed(NativeMethods.zr_enter_meeting(handle.DangerousGetHandle()));
     public void FinalizeRecording() => ThrowIfFailed(NativeMethods.zr_finalize_recording(handle.DangerousGetHandle()));
