@@ -15,7 +15,7 @@ class Mp4WriterImpl {
 
   bool open(const std::wstring& final_path, unsigned width, unsigned height, unsigned frame_rate) {
     if (writer_ || final_path.empty() || width == 0 || height == 0 || frame_rate == 0) return false;
-    final_path_ = final_path; partial_path_ = final_path + L".partial"; frame_duration_ = 10'000'000LL / frame_rate;
+    final_path_ = final_path; partial_path_ = final_path + L".partial.mp4"; frame_duration_ = 10'000'000LL / frame_rate;
     if (FAILED(MFStartup(MF_VERSION))) return false;
     mf_started_ = true;
     ComPtr<IMFAttributes> attributes; MFCreateAttributes(&attributes, 2);
