@@ -1,0 +1,19 @@
+<Page
+    x:Class="ZoomRecorder.App.Views.JoinPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Border Width="520" Padding="36" CornerRadius="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+            <StackPanel Spacing="16">
+                <TextBlock Text="Join and record" Style="{ThemeResource TitleTextBlockStyle}" />
+                <TextBlock Text="Join as a guest. Recording starts automatically before the meeting opens." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBox Header="Zoom link or meeting ID" Text="{Binding MeetingInput, Mode=TwoWay}" PlaceholderText="https://zoom.us/j/…" />
+                <PasswordBox Header="Passcode (when required)" PasswordChanged="PasscodeChanged" />
+                <TextBox Header="Display name" Text="{Binding DisplayName, Mode=TwoWay}" />
+                <TextBlock Text="{Binding ErrorMessage}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
+                <TextBlock Text="By joining, you confirm that you will provide any recording notice or consent required by Zoom policy and applicable law." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Button Content="Join and record" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Style="{ThemeResource AccentButtonStyle}" Click="JoinClicked" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Page>
