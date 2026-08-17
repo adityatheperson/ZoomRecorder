@@ -10,6 +10,7 @@
 #include <winrt/base.h>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 
 using namespace winrt;
 namespace capture = winrt::Windows::Graphics::Capture;
@@ -43,8 +44,11 @@ class MeetingRegionSourceImpl {
 
   bool start() {
     if (!IsWindow(target_)) { health_(false, "Zoom meeting window is unavailable"); return false; }
+    if (!capture::GraphicsCaptureSession::IsSupported()) { health_(false, "Windows Graphics Capture is not supported or is disabled"); return false; }
     try {
-      init_apartment(apartment_type::multi_threaded);
+      // WinUI invokes us on its existing STA thread. Reinitializing it as MTA
+      // fails with RPC_E_CHANGED_MODE; Windows Graphics Capture supports the
+      // existing apartment and CreateFreeThreaded handles frame delivery.
       device_ = make_device();
       item_ = item_for_window(target_);
       pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, item_.Size());
@@ -63,8 +67,15 @@ class MeetingRegionSourceImpl {
       session_.IsCursorCaptureEnabled(false);
       session_.StartCapture();
       return true;
+    } catch (winrt::hresult_error const& error) {
+      char message[96]{};
+      std::snprintf(message, sizeof(message), "Windows Graphics Capture could not start (HRESULT 0x%08lX)",
+                    static_cast<unsigned long>(error.code()));
+      health_(false, message);
+      stop();
+      return false;
     } catch (...) {
-      health_(false, "Windows Graphics Capture could not start");
+      health_(false, "Windows Graphics Capture could not start (unknown Windows error)");
       stop();
       return false;
     }

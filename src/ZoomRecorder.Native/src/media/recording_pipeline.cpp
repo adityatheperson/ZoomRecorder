@@ -50,7 +50,11 @@ class RecordingPipelineImpl {
     microphone_ = std::make_unique<WasapiSource>(false,
       [this](auto samples, unsigned rate, unsigned short channels, std::int64_t time) { audio(true, samples, rate, channels, time); },
       [this](bool ok, const char* message) { component_health(RecordingComponent::Microphone, ok, message); });
-    if (!video_->start() || !meeting_audio_->start() || !microphone_->start()) return fail("A required capture source could not start");
+    // Each source reports its own diagnostic. Do not overwrite it with a generic
+    // error, or the managed client cannot tell which Windows API failed.
+    if (!video_->start()) return false;
+    if (!meeting_audio_->start()) return fail("Meeting audio capture thread could not start");
+    if (!microphone_->start()) return fail("Microphone capture thread could not start");
     std::unique_lock lock(state_mutex_);
     state_changed_.wait_for(lock, std::chrono::seconds(8), [this] { return readiness_.can_enter_meeting() || readiness_.has_failed(); });
     if (!readiness_.can_enter_meeting()) { lock.unlock(); stop_and_finalize(); return fail("Recording sources did not become ready"); }
