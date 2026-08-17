@@ -4,6 +4,9 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#ifdef ZR_WITH_ZOOM
+#include "zoom/zoom_meeting_client.h"
+#endif
 
 namespace {
 struct session {
@@ -13,6 +16,9 @@ struct session {
   bool prepared{};
   bool recording{};
   bool entered{};
+#ifdef ZR_WITH_ZOOM
+  std::unique_ptr<ZoomMeetingClient> zoom;
+#endif
 };
 
 void emit(session& value, const char* json) {
@@ -22,7 +28,14 @@ void emit(session& value, const char* json) {
 
 zr_result zr_create(zr_handle* out_handle) {
   if (!out_handle) return ZR_INVALID_ARGUMENT;
-  try { *out_handle = new session{}; return ZR_OK; }
+  try {
+    auto value = std::make_unique<session>();
+#ifdef ZR_WITH_ZOOM
+    auto* raw = value.get();
+    value->zoom = std::make_unique<ZoomMeetingClient>([raw](const char* json) { emit(*raw, json); });
+#endif
+    *out_handle = value.release(); return ZR_OK;
+  }
   catch (...) { *out_handle = nullptr; return ZR_INTERNAL_ERROR; }
 }
 
@@ -44,6 +57,10 @@ zr_result zr_prepare_meeting(zr_handle handle, const char* request_json) {
   auto& value = *static_cast<session*>(handle);
   std::scoped_lock lock(value.mutex);
   if (value.prepared) return ZR_INVALID_STATE;
+#ifdef ZR_WITH_ZOOM
+  const auto result = value.zoom->prepare(request_json);
+  if (result != 0) return static_cast<zr_result>(result);
+#endif
   value.prepared = true; emit(value, R"({"type":"meeting_prepared"})");
   return ZR_OK;
 }
@@ -62,6 +79,10 @@ zr_result zr_enter_meeting(zr_handle handle) {
   auto& value = *static_cast<session*>(handle);
   std::scoped_lock lock(value.mutex);
   if (!value.recording || value.entered) return ZR_INVALID_STATE;
+#ifdef ZR_WITH_ZOOM
+  const auto result = value.zoom->enter();
+  if (result != 0) return static_cast<zr_result>(result);
+#endif
   value.entered = true; emit(value, R"({"type":"meeting_entered"})");
   return ZR_OK;
 }

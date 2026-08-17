@@ -18,7 +18,16 @@ internal sealed class NativeSession : IDisposable
         ThrowIfFailed(NativeMethods.zr_set_event_callback(handle.DangerousGetHandle(), callback, nint.Zero));
     }
 
-    public void Prepare(MeetingJoinRequest request) => ThrowIfFailed(NativeMethods.zr_prepare_meeting(handle.DangerousGetHandle(), JsonSerializer.Serialize(request)));
+    public void Prepare(MeetingJoinRequest request)
+    {
+        var clientId = Environment.GetEnvironmentVariable("ZOOM_CLIENT_ID", EnvironmentVariableTarget.User);
+        var clientSecret = Environment.GetEnvironmentVariable("ZOOM_CLIENT_SECRET", EnvironmentVariableTarget.User);
+        if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
+            throw new InvalidOperationException("Zoom Meeting SDK credentials are not configured.");
+        var jwt = MeetingSdkJwtFactory.Create(clientId, clientSecret, DateTimeOffset.UtcNow);
+        var payload = JsonSerializer.Serialize(new { request.MeetingId, request.Passcode, request.DisplayName, Jwt = jwt });
+        ThrowIfFailed(NativeMethods.zr_prepare_meeting(handle.DangerousGetHandle(), payload));
+    }
     public void StartRecording(string path) => ThrowIfFailed(NativeMethods.zr_start_recording(handle.DangerousGetHandle(), path));
     public void Enter() => ThrowIfFailed(NativeMethods.zr_enter_meeting(handle.DangerousGetHandle()));
     public void FinalizeRecording() => ThrowIfFailed(NativeMethods.zr_finalize_recording(handle.DangerousGetHandle()));
