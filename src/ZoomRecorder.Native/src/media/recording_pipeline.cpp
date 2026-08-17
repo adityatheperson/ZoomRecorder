@@ -41,7 +41,7 @@ class RecordingPipelineImpl {
     const auto width = static_cast<unsigned>(bounds.right - bounds.left), height = static_cast<unsigned>(bounds.bottom - bounds.top);
     if (!writer_.open(output, width, height)) return fail("MP4 encoder or output file unavailable");
     mark(RecordingComponent::Encoder); mark(RecordingComponent::OutputFile);
-    video_ = std::make_unique<MeetingRegionSource>(host,
+    video_ = std::make_unique<MeetingRegionSource>(host, writer_.device(),
       [this](ID3D11Texture2D* texture, std::int64_t time) { std::scoped_lock lock(writer_mutex_); if (!writer_.write_video(texture, time)) fail("Video encoder stopped"); },
       [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); });
     meeting_audio_ = std::make_unique<WasapiSource>(true,

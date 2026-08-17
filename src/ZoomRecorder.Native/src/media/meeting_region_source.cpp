@@ -19,11 +19,9 @@ namespace directx = winrt::Windows::Graphics::DirectX;
 namespace direct3d = winrt::Windows::Graphics::DirectX::Direct3D11;
 
 namespace {
-direct3d::IDirect3DDevice make_device() {
+direct3d::IDirect3DDevice make_device(ID3D11Device* native_device) {
   com_ptr<ID3D11Device> d3d;
-  com_ptr<ID3D11DeviceContext> context;
-  check_hresult(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                                  nullptr, 0, D3D11_SDK_VERSION, d3d.put(), nullptr, context.put()));
+  d3d.copy_from(native_device);
   auto dxgi = d3d.as<IDXGIDevice>();
   com_ptr<::IInspectable> inspectable;
   check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), inspectable.put()));
@@ -40,8 +38,8 @@ capture::GraphicsCaptureItem item_for_window(HWND window) {
 
 class MeetingRegionSourceImpl {
  public:
-  MeetingRegionSourceImpl(HWND target, MeetingRegionSource::FrameCallback frame, MeetingRegionSource::HealthCallback health)
-      : target_(target), frame_(std::move(frame)), health_(std::move(health)) {}
+  MeetingRegionSourceImpl(HWND target, ID3D11Device* device, MeetingRegionSource::FrameCallback frame, MeetingRegionSource::HealthCallback health)
+      : target_(target), frame_(std::move(frame)), health_(std::move(health)) { native_device_.copy_from(device); }
 
   bool start() {
     if (!IsWindow(target_)) { health_(false, "Zoom meeting window is unavailable"); return false; }
@@ -52,7 +50,7 @@ class MeetingRegionSourceImpl {
       // WinUI invokes us on its existing STA thread. Reinitializing it as MTA
       // fails with RPC_E_CHANGED_MODE; Windows Graphics Capture supports the
       // existing apartment and CreateFreeThreaded handles frame delivery.
-      device_ = make_device();
+      device_ = make_device(native_device_.get());
       item_ = item_for_window(capture_window_);
       pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, item_.Size());
       frame_token_ = pool_.FrameArrived([this](auto const& sender, auto const&) {
@@ -126,6 +124,7 @@ class MeetingRegionSourceImpl {
  private:
   HWND target_{};
   HWND capture_window_{};
+  com_ptr<ID3D11Device> native_device_;
   MeetingRegionSource::FrameCallback frame_;
   MeetingRegionSource::HealthCallback health_;
   std::atomic_bool ready_{};
@@ -140,8 +139,8 @@ class MeetingRegionSourceImpl {
   event_token frame_token_{};
 };
 
-MeetingRegionSource::MeetingRegionSource(HWND target, FrameCallback frame, HealthCallback health)
-    : impl_(std::make_unique<MeetingRegionSourceImpl>(target, std::move(frame), std::move(health))) {}
+MeetingRegionSource::MeetingRegionSource(HWND target, ID3D11Device* device, FrameCallback frame, HealthCallback health)
+    : impl_(std::make_unique<MeetingRegionSourceImpl>(target, device, std::move(frame), std::move(health))) {}
 MeetingRegionSource::~MeetingRegionSource() { impl_->stop(); }
 bool MeetingRegionSource::start() { return impl_->start(); }
 void MeetingRegionSource::stop() { impl_->stop(); }

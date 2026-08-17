@@ -3,6 +3,7 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <mfapi.h>
 #include <wrl/client.h>
 #include <windows.h>
 #include <algorithm>
@@ -18,9 +19,15 @@ class Mp4WriterImpl {
     final_path_ = final_path; partial_path_ = final_path + L".partial.mp4"; frame_duration_ = 10'000'000LL / frame_rate;
     if (FAILED(MFStartup(MF_VERSION))) return false;
     mf_started_ = true;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT, nullptr, 0,
+        D3D11_SDK_VERSION, &device_, nullptr, nullptr))) return false;
+    if (FAILED(MFCreateDXGIDeviceManager(&device_reset_token_, &device_manager_)) ||
+        FAILED(device_manager_->ResetDevice(device_.Get(), device_reset_token_))) return false;
     ComPtr<IMFAttributes> attributes; MFCreateAttributes(&attributes, 2);
     attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
     attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
+    attributes->SetUnknown(MF_SINK_WRITER_D3D_MANAGER, device_manager_.Get());
     if (FAILED(MFCreateSinkWriterFromURL(partial_path_.c_str(), nullptr, attributes.Get(), &writer_))) return false;
 
     ComPtr<IMFMediaType> output_video; MFCreateMediaType(&output_video);
@@ -52,7 +59,14 @@ class Mp4WriterImpl {
 
   bool write_video(ID3D11Texture2D* texture, std::int64_t timestamp) {
     if (!writer_ || !texture) return false;
-    ComPtr<IMFMediaBuffer> buffer; if (FAILED(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), texture, 0, FALSE, &buffer))) return false;
+    ComPtr<IMFMediaBuffer> surface; if (FAILED(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), texture, 0, FALSE, &surface))) return false;
+    ComPtr<IMF2DBuffer> surface_2d; if (FAILED(surface.As(&surface_2d))) return false;
+    DWORD length{}; if (FAILED(surface_2d->GetContiguousLength(&length)) || length == 0) return false;
+    ComPtr<IMFMediaBuffer> buffer; if (FAILED(MFCreateMemoryBuffer(length, &buffer))) return false;
+    BYTE* bytes{}; if (FAILED(buffer->Lock(&bytes, nullptr, nullptr))) return false;
+    const auto copied = surface_2d->ContiguousCopyTo(bytes, length);
+    buffer->Unlock();
+    if (FAILED(copied) || FAILED(buffer->SetCurrentLength(length))) return false;
     ComPtr<IMFSample> sample; MFCreateSample(&sample); sample->AddBuffer(buffer.Get());
     const auto time = normalize(timestamp, first_video_); sample->SetSampleTime(time); sample->SetSampleDuration(frame_duration_);
     return SUCCEEDED(writer_->WriteSample(video_stream_, sample.Get()));
@@ -78,12 +92,14 @@ class Mp4WriterImpl {
     return final_result_;
   }
   bool is_open() const { return writer_ != nullptr && !finalized_; }
+  ID3D11Device* device() const { return device_.Get(); }
   const std::wstring& final_path() const { return final_path_; }
 
  private:
   std::int64_t normalize(std::int64_t value, std::int64_t& first) { if (first < 0) first = value; return std::max<std::int64_t>(0, value - first); }
   void shutdown() { if (mf_started_) { MFShutdown(); mf_started_ = false; } }
-  ComPtr<IMFSinkWriter> writer_; DWORD video_stream_{}, audio_stream_{}; std::int64_t frame_duration_{};
+  ComPtr<IMFSinkWriter> writer_; ComPtr<ID3D11Device> device_; ComPtr<IMFDXGIDeviceManager> device_manager_;
+  UINT device_reset_token_{}; DWORD video_stream_{}, audio_stream_{}; std::int64_t frame_duration_{};
   std::int64_t first_video_{-1}, first_audio_{-1}; bool mf_started_{}, finalized_{}, final_result_{};
   std::wstring final_path_, partial_path_;
 };
@@ -95,4 +111,5 @@ bool Mp4Writer::write_video(ID3D11Texture2D* value, std::int64_t time) { return 
 bool Mp4Writer::write_audio(std::span<const float> value, std::int64_t time) { return impl_->write_audio(value, time); }
 bool Mp4Writer::finalize() { return impl_->finalize(); }
 bool Mp4Writer::is_open() const { return impl_->is_open(); }
+ID3D11Device* Mp4Writer::device() const { return impl_->device(); }
 const std::wstring& Mp4Writer::final_path() const { return impl_->final_path(); }

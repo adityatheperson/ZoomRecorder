@@ -12,7 +12,7 @@ class MeetingRegionSource {
  public:
   using HealthCallback = std::function<void(bool, const char*)>;
   using FrameCallback = std::function<void(ID3D11Texture2D*, std::int64_t)>;
-  MeetingRegionSource(HWND target, FrameCallback frame, HealthCallback health);
+  MeetingRegionSource(HWND target, ID3D11Device* device, FrameCallback frame, HealthCallback health);
   ~MeetingRegionSource();
   bool start();
   void stop();
