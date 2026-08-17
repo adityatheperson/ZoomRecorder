@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml.Controls;
 using ZoomRecorder.App.ViewModels;
-using System.Diagnostics;
+using ZoomRecorder.App.Services;
 
 namespace ZoomRecorder.App.Views;
 
@@ -15,7 +15,8 @@ public sealed partial class CompletionPage : Page
         this.done = done;
         DataContext = viewModel;
     }
-    private void OpenRecording(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => Process.Start(new ProcessStartInfo(viewModel.Path) { UseShellExecute = true });
-    private void OpenFolder(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => Process.Start("explorer.exe", $"/select,\"{viewModel.Path}\"");
+    private string RecordingDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Meeting Recordings");
+    private void OpenRecording(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => LocalFileActions.Open(viewModel.Path, RecordingDirectory);
+    private void OpenFolder(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => LocalFileActions.SelectInFolder(viewModel.Path, RecordingDirectory);
     private void Done(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => done();
 }
