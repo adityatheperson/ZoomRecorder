@@ -1,0 +1,7 @@
+.worktrees/
+artifacts/
+bin/
+obj/
+.vs/
+*.user
+*.partial
