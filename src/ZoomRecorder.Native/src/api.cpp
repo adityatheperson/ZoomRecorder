@@ -74,6 +74,7 @@ zr_result zr_prepare_meeting(zr_handle handle, const char* request_json) {
   if (!handle || !request_json || !*request_json) return ZR_INVALID_ARGUMENT;
   auto& value = *static_cast<session*>(handle);
   std::scoped_lock lock(value.mutex);
+  if (value.prepared && !value.entered) return ZR_OK;
   if (value.prepared) return ZR_INVALID_STATE;
 #ifdef ZR_WITH_ZOOM
   const auto result = value.zoom->prepare(request_json);
