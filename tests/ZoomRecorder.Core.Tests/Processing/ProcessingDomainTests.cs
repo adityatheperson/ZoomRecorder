@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ZoomRecorder.Core.Processing;
 
 namespace ZoomRecorder.Core.Tests.Processing;
@@ -55,24 +56,49 @@ public sealed class ProcessingDomainTests
     }
 
     [Fact]
-    public void Needs_attention_records_sanitized_error_and_retries_failed_stage()
+    public void Needs_attention_records_a_closed_error_identifier_and_retries_failed_stage()
     {
         var job = NewJob();
         job.TransitionTo(ProcessingState.PreparingAudio, StartedAt.AddMinutes(1));
         job.TransitionTo(ProcessingState.Transcribing, StartedAt.AddMinutes(2));
 
-        job.MarkNeedsAttention(" provider.timeout: <html>secret response</html> ", StartedAt.AddMinutes(3));
+        job.MarkNeedsAttention(CloudProcessingErrorCode.TranscriptionUnavailable, StartedAt.AddMinutes(3));
 
         Assert.Equal(ProcessingState.NeedsAttention, job.State);
         Assert.Equal(ProcessingState.Transcribing, job.FailedStage);
-        Assert.Equal("provider.timeout", job.ErrorCode);
-        Assert.DoesNotContain("secret", job.ErrorCode, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(CloudProcessingErrorCode.TranscriptionUnavailable, job.ErrorCode);
 
         job.Retry(StartedAt.AddMinutes(4));
 
         Assert.Equal(ProcessingState.Transcribing, job.State);
         Assert.Null(job.FailedStage);
         Assert.Null(job.ErrorCode);
+    }
+
+    [Fact]
+    public void Processing_job_exposes_no_free_text_error_input_path()
+    {
+        var freeTextParameters = typeof(ProcessingJob)
+            .GetMethods()
+            .Where(method => method.Name == nameof(ProcessingJob.MarkNeedsAttention))
+            .SelectMany(method => method.GetParameters())
+            .Where(parameter => parameter.ParameterType == typeof(string));
+
+        Assert.Empty(freeTextParameters);
+    }
+
+    [Fact]
+    public void Invalid_error_identifier_leaves_job_unchanged()
+    {
+        var job = NewJob();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            job.MarkNeedsAttention((CloudProcessingErrorCode)int.MaxValue, StartedAt.AddMinutes(1)));
+
+        Assert.Equal(ProcessingState.ReadyToProcess, job.State);
+        Assert.Null(job.FailedStage);
+        Assert.Null(job.ErrorCode);
+        Assert.Equal(StartedAt, job.UpdatedAt);
     }
 
     [Theory]
@@ -95,7 +121,7 @@ public sealed class ProcessingDomainTests
     public void Needs_attention_job_can_be_cancelled_but_terminal_job_cannot()
     {
         var attentionJob = NewJob();
-        attentionJob.MarkNeedsAttention("audio_unreadable", StartedAt.AddMinutes(1));
+        attentionJob.MarkNeedsAttention(CloudProcessingErrorCode.AudioPreparationFailed, StartedAt.AddMinutes(1));
         attentionJob.Cancel(StartedAt.AddMinutes(2));
         Assert.Equal(ProcessingState.Cancelled, attentionJob.State);
 
@@ -176,6 +202,18 @@ public sealed class ProcessingDomainTests
             StudyPackageValidator.Validate(ValidPackage() with { NoteSections = null! }));
         Assert.Throws<StudyPackageValidationException>(() =>
             StudyPackageValidator.Validate(ValidPackage() with { Assignments = null! }));
+    }
+
+    [Fact]
+    public void Study_schema_rejects_a_lecture_date_omitted_during_deserialization()
+    {
+        var json = JsonSerializer.SerializeToNode(ValidPackage())!.AsObject();
+        Assert.True(json.Remove(nameof(StudyPackage.LectureDate)));
+        var package = json.Deserialize<StudyPackage>();
+
+        Assert.NotNull(package);
+        Assert.Equal(default, package.LectureDate);
+        Assert.Throws<StudyPackageValidationException>(() => StudyPackageValidator.Validate(package));
     }
 
     [Theory]

@@ -59,6 +59,11 @@ public static class StudyPackageValidator
         }
 
         Required(package.LectureTitle, nameof(package.LectureTitle));
+        if (package.LectureDate == default)
+        {
+            Reject($"{nameof(package.LectureDate)} is required.");
+        }
+
         Required(package.ShortSummary, nameof(package.ShortSummary));
         RequiredCollection(package.NoteSections, nameof(package.NoteSections));
         RequiredCollection(package.KeyTerms, nameof(package.KeyTerms));

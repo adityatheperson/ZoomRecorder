@@ -1,6 +1,15 @@
-using System.Text;
-
 namespace ZoomRecorder.Core.Processing;
+
+public enum CloudProcessingErrorCode
+{
+    AudioPreparationFailed,
+    TranscriptionUnavailable,
+    StudyGenerationUnavailable,
+    ClassGuideUpdateFailed,
+    StorageCommitFailed,
+    CredentialUnavailable,
+    VideoRecycleFailed
+}
 
 public sealed class ProcessingJob
 {
@@ -23,7 +32,7 @@ public sealed class ProcessingJob
 
     public ProcessingState? FailedStage { get; private set; }
 
-    public string? ErrorCode { get; private set; }
+    public CloudProcessingErrorCode? ErrorCode { get; private set; }
 
     public DateTimeOffset StartedAt { get; }
 
@@ -81,7 +90,7 @@ public sealed class ProcessingJob
         }
     }
 
-    public void MarkNeedsAttention(string errorCode, DateTimeOffset now)
+    public void MarkNeedsAttention(CloudProcessingErrorCode errorCode, DateTimeOffset now)
     {
         EnsureTimestamp(now);
         if (!IsActive(State))
@@ -89,8 +98,11 @@ public sealed class ProcessingJob
             throw new InvalidProcessingTransitionException(State, ProcessingState.NeedsAttention);
         }
 
-        FailedStage = State;
-        ErrorCode = SanitizeErrorCode(errorCode);
+        var failedStage = State;
+        var validatedErrorCode = ValidateErrorCode(errorCode);
+
+        FailedStage = failedStage;
+        ErrorCode = validatedErrorCode;
         State = ProcessingState.NeedsAttention;
         UpdatedAt = now;
     }
@@ -163,46 +175,14 @@ public sealed class ProcessingJob
         }
     }
 
-    private static string SanitizeErrorCode(string errorCode)
+    private static CloudProcessingErrorCode ValidateErrorCode(CloudProcessingErrorCode errorCode)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(errorCode);
-
-        var result = new StringBuilder(capacity: Math.Min(errorCode.Length, 128));
-        var separatorPending = false;
-        foreach (var character in errorCode.Trim())
+        if (!Enum.IsDefined(errorCode))
         {
-            if (character is ':' or '<')
-            {
-                break;
-            }
-
-            if (result.Length >= 128)
-            {
-                break;
-            }
-
-            if (char.IsLetterOrDigit(character) || character is '.' or '_' or '-')
-            {
-                if (separatorPending && result.Length > 0 && result[^1] != '-')
-                {
-                    result.Append('-');
-                }
-
-                result.Append(char.ToLowerInvariant(character));
-                separatorPending = false;
-            }
-            else if (char.IsWhiteSpace(character))
-            {
-                separatorPending = true;
-            }
+            throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unknown cloud processing error code.");
         }
 
-        if (result.Length == 0)
-        {
-            throw new ArgumentException("The error code must contain letters or digits.", nameof(errorCode));
-        }
-
-        return result.ToString().TrimEnd('-');
+        return errorCode;
     }
 }
 
