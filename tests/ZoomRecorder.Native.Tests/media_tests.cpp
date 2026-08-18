@@ -1,9 +1,16 @@
 #include "audio_mixer.h"
+#include "audio_sample_timeline.h"
 #include "recording_readiness.h"
 #include <cmath>
 #include <vector>
 
 bool run_media_tests() {
+  AudioSampleTimeline timeline(48000, 2);
+  const auto first = timeline.next(960);
+  const auto second = timeline.next(480);
+  if (first.timestamp != 0 || first.duration != 100000 ||
+      second.timestamp != 100000 || second.duration != 50000) return false;
+
   AudioMixer mixer({48000, 2});
   const std::vector<float> meeting{0.5f, 1.0f, 0.5f};
   const std::vector<float> microphone{0.5f, 1.0f};

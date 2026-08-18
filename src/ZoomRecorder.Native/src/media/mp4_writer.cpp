@@ -1,4 +1,5 @@
 #include "mp4_writer.h"
+#include "audio_sample_timeline.h"
 
 #include <mfapi.h>
 #include <mfidl.h>
@@ -72,14 +73,15 @@ class Mp4WriterImpl {
     return SUCCEEDED(writer_->WriteSample(video_stream_, sample.Get()));
   }
 
-  bool write_audio(std::span<const float> audio, std::int64_t timestamp) {
+  bool write_audio(std::span<const float> audio, std::int64_t) {
     if (!writer_ || audio.empty() || audio.size() % 2 != 0) return false;
     const auto bytes = static_cast<DWORD>(audio.size_bytes()); ComPtr<IMFMediaBuffer> buffer;
     if (FAILED(MFCreateMemoryBuffer(bytes, &buffer))) return false;
     BYTE* target{}; if (FAILED(buffer->Lock(&target, nullptr, nullptr))) return false;
     memcpy(target, audio.data(), bytes); buffer->Unlock(); buffer->SetCurrentLength(bytes);
     ComPtr<IMFSample> sample; MFCreateSample(&sample); sample->AddBuffer(buffer.Get());
-    sample->SetSampleTime(normalize(timestamp, first_audio_)); sample->SetSampleDuration(static_cast<LONGLONG>(audio.size() / 2) * 10'000'000LL / 48000);
+    const auto timing = audio_timeline_.next(audio.size());
+    sample->SetSampleTime(timing.timestamp); sample->SetSampleDuration(timing.duration);
     return SUCCEEDED(writer_->WriteSample(audio_stream_, sample.Get()));
   }
 
@@ -100,7 +102,7 @@ class Mp4WriterImpl {
   void shutdown() { if (mf_started_) { MFShutdown(); mf_started_ = false; } }
   ComPtr<IMFSinkWriter> writer_; ComPtr<ID3D11Device> device_; ComPtr<IMFDXGIDeviceManager> device_manager_;
   UINT device_reset_token_{}; DWORD video_stream_{}, audio_stream_{}; std::int64_t frame_duration_{};
-  std::int64_t first_video_{-1}, first_audio_{-1}; bool mf_started_{}, finalized_{}, final_result_{};
+  std::int64_t first_video_{-1}; AudioSampleTimeline audio_timeline_{48000, 2}; bool mf_started_{}, finalized_{}, final_result_{};
   std::wstring final_path_, partial_path_;
 };
 
