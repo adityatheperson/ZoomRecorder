@@ -2,7 +2,17 @@ using System.Runtime.InteropServices;
 
 namespace ZoomRecorder.App.Interop;
 
-internal enum ZrResult { Ok, InvalidArgument, InvalidState, InternalError }
+internal enum ZrResult
+{
+    Ok,
+    InvalidArgument,
+    InvalidState,
+    InternalError,
+    Cancelled,
+    AudioStreamMissing,
+    MediaError,
+    IoError
+}
 
 internal static partial class NativeMethods
 {
@@ -10,6 +20,23 @@ internal static partial class NativeMethods
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     internal delegate void EventCallback(nint json, nint context);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    internal delegate void ChunkCallback(nint chunk, nint context);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct ZrAudioChunk
+    {
+        internal uint Index;
+        internal nint Path;
+        internal long StartMilliseconds;
+        internal long EndMilliseconds;
+        internal nint Sha256;
+        internal ulong ByteSize;
+        internal uint NormalizedSampleRate;
+        internal uint EncodedSampleRate;
+        internal uint ChannelCount;
+    }
 
     [LibraryImport(Library)] internal static partial ZrResult zr_create(out nint handle);
     [LibraryImport(Library)] internal static partial ZrResult zr_destroy(nint handle);
@@ -19,4 +46,14 @@ internal static partial class NativeMethods
     [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf16)] internal static partial ZrResult zr_start_recording(nint handle, string outputPath);
     [LibraryImport(Library)] internal static partial ZrResult zr_enter_meeting(nint handle);
     [LibraryImport(Library)] internal static partial ZrResult zr_finalize_recording(nint handle);
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf16)]
+    internal static unsafe partial ZrResult zr_prepare_audio_chunks(
+        string mp4Path,
+        string outputDirectory,
+        ulong maxChunkBytes,
+        ChunkCallback callback,
+        nint context,
+        nint* outHandle);
+    [LibraryImport(Library)] internal static partial ZrResult zr_cancel_audio_preparation(nint handle);
+    [LibraryImport(Library)] internal static partial ZrResult zr_destroy_audio_preparation(nint handle);
 }

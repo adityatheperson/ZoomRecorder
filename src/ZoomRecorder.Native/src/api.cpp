@@ -3,7 +3,10 @@
 
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 #include <string>
+#include <thread>
+#include "media/audio_chunk_exporter.h"
 #include "media/recording_pipeline.h"
 #ifdef ZR_WITH_ZOOM
 #include "zoom/zoom_meeting_client.h"
@@ -24,8 +27,28 @@ struct session {
 #endif
 };
 
+struct audio_preparation {
+  std::mutex mutex;
+  std::condition_variable finished;
+  audio_chunk_cancellation cancellation;
+  bool active{true};
+  std::thread::id worker;
+};
+
 void emit(session& value, const char* json) {
   if (value.callback) value.callback(json, value.context);
+}
+
+zr_result map_audio_result(audio_chunk_export_result result) {
+  switch (result) {
+    case audio_chunk_export_result::success: return ZR_OK;
+    case audio_chunk_export_result::invalid_argument: return ZR_INVALID_ARGUMENT;
+    case audio_chunk_export_result::missing_audio: return ZR_AUDIO_STREAM_MISSING;
+    case audio_chunk_export_result::cancelled: return ZR_CANCELLED;
+    case audio_chunk_export_result::media_failure: return ZR_MEDIA_ERROR;
+    case audio_chunk_export_result::io_failure: return ZR_IO_ERROR;
+  }
+  return ZR_INTERNAL_ERROR;
 }
 }
 
@@ -117,4 +140,73 @@ zr_result zr_finalize_recording(zr_handle handle) {
   const auto finalized = value.pipeline->stop_and_finalize();
   value.recording_started = false; emit(value, R"({"type":"recording_finalized"})");
   return finalized ? ZR_OK : ZR_INTERNAL_ERROR;
+}
+
+zr_result zr_prepare_audio_chunks(
+    const wchar_t* mp4_path,
+    const wchar_t* output_directory,
+    uint64_t max_chunk_bytes,
+    zr_chunk_callback callback,
+    void* context,
+    zr_audio_prepare_handle* out_handle) {
+  if (!out_handle) return ZR_INVALID_ARGUMENT;
+  *out_handle = nullptr;
+  if (!mp4_path || !*mp4_path || !output_directory || !*output_directory || max_chunk_bytes == 0 || !callback)
+    return ZR_INVALID_ARGUMENT;
+  try {
+    auto preparation = std::make_unique<audio_preparation>();
+    preparation->worker = std::this_thread::get_id();
+    auto* raw = preparation.release();
+    *out_handle = raw;
+    audio_chunk_exporter exporter(raw->cancellation);
+    const auto result = exporter.export_chunks(mp4_path, output_directory, max_chunk_bytes,
+      [callback, context](const audio_chunk_export_record& chunk) {
+        const zr_audio_chunk value{
+          chunk.index,
+          chunk.path.c_str(),
+          chunk.start_milliseconds,
+          chunk.end_milliseconds,
+          chunk.sha256.c_str(),
+          chunk.byte_size,
+          chunk.normalized_sample_rate,
+          chunk.encoded_sample_rate,
+          chunk.channel_count
+        };
+        callback(&value, context);
+      });
+    {
+      std::scoped_lock lock(raw->mutex);
+      raw->active = false;
+    }
+    raw->finished.notify_all();
+    return map_audio_result(result);
+  } catch (...) {
+    auto* raw = static_cast<audio_preparation*>(*out_handle);
+    if (raw) {
+      {
+        std::scoped_lock lock(raw->mutex);
+        raw->active = false;
+      }
+      raw->finished.notify_all();
+    }
+    return ZR_INTERNAL_ERROR;
+  }
+}
+
+zr_result zr_cancel_audio_preparation(zr_audio_prepare_handle handle) {
+  if (!handle) return ZR_INVALID_ARGUMENT;
+  static_cast<audio_preparation*>(handle)->cancellation.cancel();
+  return ZR_OK;
+}
+
+zr_result zr_destroy_audio_preparation(zr_audio_prepare_handle handle) {
+  if (!handle) return ZR_INVALID_ARGUMENT;
+  auto* preparation = static_cast<audio_preparation*>(handle);
+  preparation->cancellation.cancel();
+  std::unique_lock lock(preparation->mutex);
+  if (preparation->active && preparation->worker == std::this_thread::get_id()) return ZR_INVALID_STATE;
+  preparation->finished.wait(lock, [preparation] { return !preparation->active; });
+  lock.unlock();
+  delete preparation;
+  return ZR_OK;
 }
