@@ -5,7 +5,12 @@ namespace ZoomRecorder.App.ViewModels.Library;
 
 public sealed class RecordingsViewModel : LibraryViewModelBase
 {
+    private const string AssignmentUnavailableMessage =
+        "Assignment is unavailable right now. Try again.";
+
     private readonly ILibraryRepository _repository;
+    private RecordingListItem? _assignmentRetryItem;
+    private string? _assignmentErrorMessage;
 
     public RecordingsViewModel(ILibraryRepository repository)
     {
@@ -13,6 +18,8 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
     }
 
     public ObservableCollection<RecordingListItem> Recordings { get; } = [];
+    public string? AssignmentErrorMessage => _assignmentErrorMessage;
+    public bool CanRetryAssignment => _assignmentRetryItem is not null;
 
     public Task LoadAsync(CancellationToken cancellationToken) =>
         LoadQueryAsync(query: null, cancellationToken);
@@ -21,6 +28,47 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
     {
         ArgumentNullException.ThrowIfNull(query);
         return LoadQueryAsync(query.Trim(), cancellationToken);
+    }
+
+    public async Task<bool> AssignAsync(
+        RecordingListItem item,
+        Func<RecordingRecord, CancellationToken, Task<bool>> assignment,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(assignment);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            var assigned = await assignment(item.Recording, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (assigned)
+            {
+                ClearAssignmentFailure();
+            }
+
+            return assigned;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            SetAssignmentFailure(item);
+            return false;
+        }
+    }
+
+    public Task<bool> RetryAssignmentAsync(
+        Func<RecordingRecord, CancellationToken, Task<bool>> assignment,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(assignment);
+        return _assignmentRetryItem is null
+            ? Task.FromResult(false)
+            : AssignAsync(_assignmentRetryItem, assignment, cancellationToken);
     }
 
     private async Task LoadQueryAsync(string? query, CancellationToken cancellationToken)
@@ -52,6 +100,38 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         finally
         {
             EndOperation();
+        }
+    }
+
+    private void SetAssignmentFailure(RecordingListItem item)
+    {
+        var couldRetry = CanRetryAssignment;
+        _assignmentRetryItem = item;
+        if (_assignmentErrorMessage != AssignmentUnavailableMessage)
+        {
+            _assignmentErrorMessage = AssignmentUnavailableMessage;
+            RaisePropertyChanged(nameof(AssignmentErrorMessage));
+        }
+
+        if (!couldRetry)
+        {
+            RaisePropertyChanged(nameof(CanRetryAssignment));
+        }
+    }
+
+    private void ClearAssignmentFailure()
+    {
+        var couldRetry = CanRetryAssignment;
+        _assignmentRetryItem = null;
+        if (_assignmentErrorMessage is not null)
+        {
+            _assignmentErrorMessage = null;
+            RaisePropertyChanged(nameof(AssignmentErrorMessage));
+        }
+
+        if (couldRetry)
+        {
+            RaisePropertyChanged(nameof(CanRetryAssignment));
         }
     }
 }

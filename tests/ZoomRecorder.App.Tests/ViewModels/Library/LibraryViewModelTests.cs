@@ -73,6 +73,61 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Assignment_exception_shows_sanitized_error_and_can_retry()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("lecture.mp4", null, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+
+        var assigned = await viewModel.AssignAsync(
+            item,
+            (_, _) => Task.FromException<bool>(new InvalidOperationException("database path secret")),
+            CancellationToken.None);
+
+        Assert.False(assigned);
+        Assert.Equal("Assignment is unavailable right now. Try again.", viewModel.AssignmentErrorMessage);
+        Assert.DoesNotContain("secret", viewModel.AssignmentErrorMessage);
+        Assert.True(viewModel.CanRetryAssignment);
+        Assert.Equal("lecture.mp4", Assert.Single(viewModel.Recordings).FileName);
+
+        var retryCalls = 0;
+        var retried = await viewModel.RetryAssignmentAsync(
+            (_, _) =>
+            {
+                retryCalls++;
+                return Task.FromResult(true);
+            },
+            CancellationToken.None);
+
+        Assert.True(retried);
+        Assert.Equal(1, retryCalls);
+        Assert.Null(viewModel.AssignmentErrorMessage);
+        Assert.False(viewModel.CanRetryAssignment);
+    }
+
+    [Fact]
+    public async Task Assignment_dialog_cancellation_leaves_recordings_unchanged_without_error()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("lecture.mp4", null, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+
+        var assigned = await viewModel.AssignAsync(
+            item,
+            (_, _) => Task.FromResult(false),
+            CancellationToken.None);
+
+        Assert.False(assigned);
+        Assert.Null(viewModel.AssignmentErrorMessage);
+        Assert.False(viewModel.CanRetryAssignment);
+        Assert.Same(item, Assert.Single(viewModel.Recordings));
+    }
+
+    [Fact]
     public async Task Class_detail_loads_only_its_class_lectures()
     {
         var repository = SeedTwoClasses();

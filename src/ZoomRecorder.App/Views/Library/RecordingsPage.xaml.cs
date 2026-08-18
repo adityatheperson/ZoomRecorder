@@ -8,13 +8,13 @@ namespace ZoomRecorder.App.Views.Library;
 public sealed partial class RecordingsPage : Page
 {
     private readonly RecordingsViewModel? _viewModel;
-    private readonly Func<RecordingRecord, Task>? _assignment;
+    private readonly Func<RecordingRecord, CancellationToken, Task<bool>>? _assignment;
     private readonly Action _recordClass;
     private readonly Func<Task> _retry;
 
     public RecordingsPage(
         RecordingsViewModel? viewModel,
-        Func<RecordingRecord, Task>? assignment,
+        Func<RecordingRecord, CancellationToken, Task<bool>>? assignment,
         Action recordClass,
         Func<Task> retry,
         bool isLoading = false)
@@ -52,10 +52,33 @@ public sealed partial class RecordingsPage : Page
 
     private async void AssignClicked(object sender, RoutedEventArgs args)
     {
-        if (_assignment is not null && ((FrameworkElement)sender).DataContext is RecordingListItem item)
+        if (_viewModel is not null && _assignment is not null &&
+            ((FrameworkElement)sender).DataContext is RecordingListItem item)
         {
-            await _assignment(item.Recording);
+            var assigned = await _viewModel.AssignAsync(item, _assignment, CancellationToken.None);
+            if (assigned)
+            {
+                await _viewModel.SearchAsync(SearchTextBox.Text, CancellationToken.None);
+            }
+
+            UpdateListState();
         }
+    }
+
+    private async void RetryAssignmentClicked(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel is null || _assignment is null)
+        {
+            return;
+        }
+
+        var assigned = await _viewModel.RetryAssignmentAsync(_assignment, CancellationToken.None);
+        if (assigned)
+        {
+            await _viewModel.SearchAsync(SearchTextBox.Text, CancellationToken.None);
+        }
+
+        UpdateListState();
     }
 
     private void UpdateListState()
@@ -64,6 +87,9 @@ public sealed partial class RecordingsPage : Page
         var hasItems = showLibrary && _viewModel!.Recordings.Count > 0;
         RecordingsList.Visibility = hasItems ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanel.Visibility = showLibrary && !hasItems ? Visibility.Visible : Visibility.Collapsed;
+        AssignmentErrorPanel.Visibility = showLibrary && _viewModel!.CanRetryAssignment
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void RecordClassClicked(object sender, RoutedEventArgs args) => _recordClass();

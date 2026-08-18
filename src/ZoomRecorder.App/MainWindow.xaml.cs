@@ -196,7 +196,10 @@ public sealed partial class MainWindow : Window, IAppNavigator
         {
             RootFrame.Content = new RecordingsPage(
                 viewModel,
-                recording => AssignFromLibraryAsync(library.Repository, recording),
+                (recording, cancellationToken) => ShowAssignmentDialogAsync(
+                    library.Repository,
+                    recording,
+                    cancellationToken),
                 ShowJoin,
                 RetryRecordingsAsync);
         }
@@ -359,12 +362,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
         RootFrame.Content = new CompletionPage(viewModel, ShowJoin, assign);
     }
 
-    private async Task AssignFromLibraryAsync(ILibraryRepository repository, RecordingRecord recording)
-    {
-        await ShowAssignmentDialogAsync(repository, recording);
-        NavigateRecordings();
-    }
-
     private async Task ShowCompletionAssignmentDialogAsync(
         CompletionViewModel completion,
         ILibraryRepository repository,
@@ -392,26 +389,20 @@ public sealed partial class MainWindow : Window, IAppNavigator
         }
     }
 
-    private async Task<ClassRecord?> ShowAssignmentDialogAsync(
+    private async Task<bool> ShowAssignmentDialogAsync(
         ILibraryRepository repository,
-        RecordingRecord recording)
+        RecordingRecord recording,
+        CancellationToken cancellationToken)
     {
         var assignment = new AssignRecordingViewModel(repository, recording);
-        try
-        {
-            await assignment.LoadClassesAsync(CancellationToken.None);
-        }
-        catch
-        {
-            return null;
-        }
+        await assignment.LoadClassesAsync(cancellationToken);
 
         var dialog = new AssignRecordingDialog(assignment)
         {
             XamlRoot = RootFrame.XamlRoot
         };
         await dialog.ShowAsync();
-        return dialog.AssignedClass;
+        return dialog.AssignedClass is not null;
     }
 
     private static async Task<LibraryContext?> InitializeLibraryAsync()

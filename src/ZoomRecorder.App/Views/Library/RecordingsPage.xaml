@@ -7,6 +7,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -25,26 +26,34 @@
             <Button Grid.Column="1" Content="Search" Click="SearchClicked" />
         </Grid>
 
-        <StackPanel Grid.Row="2" x:Name="LoadingPanel" Orientation="Horizontal" Spacing="10">
+        <Border Grid.Row="2" x:Name="AssignmentErrorPanel" Margin="0,0,0,12" Padding="14" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding AssignmentErrorMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Retry assignment" Click="RetryAssignmentClicked" />
+            </Grid>
+        </Border>
+
+        <StackPanel Grid.Row="3" x:Name="LoadingPanel" Orientation="Horizontal" Spacing="10">
             <ProgressRing IsActive="True" Width="20" Height="20" />
             <TextBlock Text="Loading recordings…" VerticalAlignment="Center" />
         </StackPanel>
 
-        <Border Grid.Row="2" x:Name="UnavailablePanel" Padding="18" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed" VerticalAlignment="Top">
+        <Border Grid.Row="3" x:Name="UnavailablePanel" Padding="18" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed" VerticalAlignment="Top">
             <StackPanel Spacing="10">
                 <TextBlock x:Name="UnavailableText" Text="The class library is unavailable right now. You can still record a class." TextWrapping="Wrap" />
                 <Button Content="Retry library" HorizontalAlignment="Left" Click="RetryClicked" />
             </StackPanel>
         </Border>
 
-        <StackPanel Grid.Row="2" x:Name="EmptyPanel" Spacing="8" Visibility="Collapsed">
+        <StackPanel Grid.Row="3" x:Name="EmptyPanel" Spacing="8" Visibility="Collapsed">
             <TextBlock Text="No recordings found" Style="{ThemeResource SubtitleTextBlockStyle}" />
             <TextBlock Text="Try another file name, or record a class to add your first lecture." TextWrapping="Wrap" />
             <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Left" Click="RecordClassClicked" />
         </StackPanel>
 
         <ListView
-            Grid.Row="2"
+            Grid.Row="3"
             x:Name="RecordingsList"
             ItemsSource="{Binding Recordings}"
             SelectionMode="None"
