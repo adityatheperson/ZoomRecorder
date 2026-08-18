@@ -109,6 +109,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
     const auto mapped = mapper_.map(
       status == MEETING_STATUS_CONNECTING ? ZoomMeetingStatus::Connecting :
       status == MEETING_STATUS_INMEETING ? ZoomMeetingStatus::InMeeting :
+      status == MEETING_STATUS_DISCONNECTING ? ZoomMeetingStatus::Disconnecting :
       status == MEETING_STATUS_ENDED ? ZoomMeetingStatus::Ended :
       status == MEETING_STATUS_FAILED ? ZoomMeetingStatus::Failed : ZoomMeetingStatus::Other,
       result);

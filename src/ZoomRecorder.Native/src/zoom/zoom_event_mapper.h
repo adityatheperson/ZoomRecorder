@@ -1,6 +1,6 @@
 #pragma once
 
-enum class ZoomMeetingStatus { Connecting, InMeeting, Ended, Failed, Other };
+enum class ZoomMeetingStatus { Connecting, InMeeting, Disconnecting, Ended, Failed, Other };
 enum class AppMeetingEvent { Connecting, Entered, Ended, Failed, Ignored, IgnoredDuplicate };
 
 class ZoomEventMapper {
