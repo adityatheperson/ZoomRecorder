@@ -20,11 +20,15 @@ public sealed partial class MainWindow : Window, IAppNavigator
         _nativeSession = new NativeSession();
         _joinFlow = new NativeJoinFlow(_nativeSession);
         _joinFlow.RecordingCompleted += (_, result) => DispatcherQueue.TryEnqueue(() => ShowCompletion(result));
+        _joinFlow.FinalizationFailed += (_, message) => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (RootFrame.Content is MeetingPage meeting) meeting.ShowSaveError(message);
+        });
         RootFrame.Content = new JoinPage(new JoinViewModel(_joinFlow, this));
         Closed += (_, _) => _nativeSession.Dispose();
     }
 
-    public void ShowMeeting() => RootFrame.Content = new MeetingPage();
+    public void ShowMeeting() => RootFrame.Content = new MeetingPage(_joinFlow.StopAndSaveAsync);
 
     private void ShowCompletion(RecordingResult result)
     {

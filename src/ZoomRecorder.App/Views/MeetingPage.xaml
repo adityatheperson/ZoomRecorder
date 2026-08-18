@@ -11,6 +11,7 @@
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
                 <TextBlock Text="Zoom meeting opened in its own window" Foreground="White" FontSize="22" HorizontalAlignment="Center" />
                 <TextBlock Text="Use the normal Zoom controls there. Keep this recorder running." Foreground="#9CA3AF" HorizontalAlignment="Center" />
+                <TextBlock x:Name="SaveErrorText" Foreground="#FFB4AB" TextWrapping="Wrap" Visibility="Collapsed" HorizontalAlignment="Center" />
             </StackPanel>
         </Grid>
         <Grid Grid.Row="1" Background="#EAF7F1" Padding="12,0">
@@ -23,6 +24,7 @@
                 <Ellipse Width="9" Height="9" Fill="#D93025" />
                 <TextBlock x:Name="RecordingTimerText" Text="Recording · 00:00:00" Foreground="#145C3D" FontWeight="SemiBold" />
             </StackPanel>
+            <Button Grid.Column="1" x:Name="StopSaveButton" Content="Stop &amp; Save" Click="StopSaveButton_Click" HorizontalAlignment="Center" VerticalAlignment="Center" />
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
                 <TextBlock Text="Meeting audio ✓" Foreground="#145C3D" />
                 <TextBlock Text="Microphone ✓" Foreground="#145C3D" />

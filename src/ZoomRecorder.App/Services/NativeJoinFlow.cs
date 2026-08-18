@@ -12,8 +12,9 @@ internal sealed class NativeJoinFlow : IJoinFlow
 {
     private readonly NativeSession session;
     private readonly NativeRecordingSession recording;
-    private int finalizing;
+    private readonly FinalizationGate finalization = new();
     public event EventHandler<RecordingResult>? RecordingCompleted;
+    public event EventHandler<string>? FinalizationFailed;
 
     public NativeJoinFlow(NativeSession session)
     {
@@ -24,6 +25,7 @@ internal sealed class NativeJoinFlow : IJoinFlow
 
     public async Task JoinAndRecordAsync(MeetingJoinRequest request, CancellationToken cancellationToken)
     {
+        finalization.Reset();
         var orchestrator = new MeetingOrchestrator(
             new NativeMeetingClient(session),
             recording,
@@ -34,8 +36,7 @@ internal sealed class NativeJoinFlow : IJoinFlow
 
     private void NativeEventReceived(object? sender, string json)
     {
-        if (ShouldFinalize(json) && Interlocked.Exchange(ref finalizing, 1) == 0)
-            _ = FinalizeAsync();
+        if (ShouldFinalize(json)) _ = FinalizeFromNativeAsync();
     }
 
     internal static bool ShouldFinalize(string json)
@@ -49,9 +50,28 @@ internal sealed class NativeJoinFlow : IJoinFlow
         catch (JsonException) { return false; }
     }
 
+    public Task StopAndSaveAsync() => FinalizeAsync();
+
+    private async Task FinalizeFromNativeAsync()
+    {
+        try { await FinalizeAsync(); }
+        catch { }
+    }
+
     private async Task FinalizeAsync()
     {
-        var result = await recording.StopAndFinalizeIfStartedAsync(CancellationToken.None);
-        if (result is not null) RecordingCompleted?.Invoke(this, result);
+        if (!finalization.TryBegin()) return;
+        await Task.Yield();
+        try
+        {
+            var result = await recording.StopAndFinalizeIfStartedAsync(CancellationToken.None);
+            if (result is not null) RecordingCompleted?.Invoke(this, result);
+        }
+        catch (Exception exception)
+        {
+            finalization.Reset();
+            FinalizationFailed?.Invoke(this, exception.Message);
+            throw;
+        }
     }
 }
