@@ -5,6 +5,7 @@
 #include "meeting_service_interface.h"
 #include "meeting_service_components/meeting_ui_ctrl_interface.h"
 #include "zoom_sdk.h"
+#include "zoom_event_mapper.h"
 
 #include <cctype>
 #include <chrono>
@@ -105,14 +106,20 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void onNotificationServiceStatus(SDKNotificationServiceStatus, SDKNotificationServiceError) override {}
 
   void onMeetingStatusChanged(MeetingStatus status, int result) override {
-    switch (status) {
-      case MEETING_STATUS_CONNECTING: sink_(R"({"type":"meeting_connecting"})"); break;
-      case MEETING_STATUS_INMEETING:
+    const auto mapped = mapper_.map(
+      status == MEETING_STATUS_CONNECTING ? ZoomMeetingStatus::Connecting :
+      status == MEETING_STATUS_INMEETING ? ZoomMeetingStatus::InMeeting :
+      status == MEETING_STATUS_ENDED ? ZoomMeetingStatus::Ended :
+      status == MEETING_STATUS_FAILED ? ZoomMeetingStatus::Failed : ZoomMeetingStatus::Other,
+      result);
+    switch (mapped) {
+      case AppMeetingEvent::Connecting: sink_(R"({"type":"meeting_connecting"})"); break;
+      case AppMeetingEvent::Entered:
         start_attach_meeting_window(); sink_(R"({"type":"meeting_entered"})"); break;
-      case MEETING_STATUS_ENDED:
-        if (!ended_) { ended_ = true; sink_(R"({"type":"meeting_ended"})"); }
+      case AppMeetingEvent::Ended: sink_(R"({"type":"meeting_ended"})"); break;
+      case AppMeetingEvent::Failed:
+        emit_sdk_failure(result == CONF_FAIL_REMOVED_BY_HOST ? "The host removed you from the Zoom meeting" : "Zoom meeting failed", result);
         break;
-      case MEETING_STATUS_FAILED: emit_sdk_failure("Zoom meeting failed", result); break;
       default: break;
     }
   }
@@ -175,9 +182,10 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   IAuthService* auth_{};
   IMeetingService* meeting_{};
   std::wstring meeting_id_, passcode_, display_name_, jwt_;
-  bool initialized_{}, authenticated_{}, enter_requested_{}, join_called_{}, ended_{};
+  bool initialized_{}, authenticated_{}, enter_requested_{}, join_called_{};
   HWND host_{};
   std::jthread attach_worker_;
+  ZoomEventMapper mapper_;
 };
 
 ZoomMeetingClient::ZoomMeetingClient(EventSink sink, WindowSink window_sink)

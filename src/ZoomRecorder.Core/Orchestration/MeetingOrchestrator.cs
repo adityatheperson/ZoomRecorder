@@ -37,8 +37,22 @@ public sealed class MeetingOrchestrator(
         }
         catch (Exception exception)
         {
-            await recording.StopAndFinalizeIfStartedAsync(CancellationToken.None).ConfigureAwait(false);
-            await meeting.CancelPreparedMeetingAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await recording.StopAndFinalizeIfStartedAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Cleanup must not replace the error that prevented meeting entry.
+            }
+            try
+            {
+                await meeting.CancelPreparedMeetingAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Preserve the primary failure for the user.
+            }
             lifecycle.Apply(new RequiredComponentFailed(exception.Message));
             _status.Publish(MeetingStatus.Failed(exception.Message));
             throw;

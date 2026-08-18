@@ -5,7 +5,7 @@ enum class AppMeetingEvent { Connecting, Entered, Ended, Failed, Ignored, Ignore
 
 class ZoomEventMapper {
  public:
-  AppMeetingEvent map(ZoomMeetingStatus status);
+  AppMeetingEvent map(ZoomMeetingStatus status, int failure_code = 0);
  private:
-  bool ended_{};
+  bool entered_{}, ended_{};
 };
