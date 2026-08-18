@@ -23,4 +23,8 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.260224002" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Assets\ZoomRecorder.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

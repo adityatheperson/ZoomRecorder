@@ -6,6 +6,7 @@ using ZoomRecorder.App.Interop;
 using ZoomRecorder.App.Services;
 using WinRT.Interop;
 using ZoomRecorder.Core.Ports;
+using Microsoft.UI.Windowing;
 
 namespace ZoomRecorder.App;
 
@@ -17,6 +18,8 @@ public sealed partial class MainWindow : Window, IAppNavigator
     public MainWindow()
     {
         InitializeComponent();
+        var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
+        AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
         _joinFlow = new NativeJoinFlow(_nativeSession);
         _joinFlow.RecordingCompleted += (_, result) => DispatcherQueue.TryEnqueue(() => ShowCompletion(result));
