@@ -12,6 +12,7 @@
 #include <chrono>
 #include <algorithm>
 #include <thread>
+#include <cstdio>
 
 namespace {
 std::vector<float> normalize_audio(std::span<const float> input, unsigned rate, unsigned short channels) {
@@ -73,7 +74,7 @@ class RecordingPipelineImpl {
     video_ = std::make_unique<MeetingRegionSource>(meeting_window, writer_.device(),
       [this](ID3D11Texture2D* texture, std::int64_t time) {
         std::scoped_lock lock(writer_mutex_);
-        if (!writer_.write_video(texture, time)) fail("Video encoder stopped");
+        if (!writer_.write_video(texture, time)) fail_encoder("Video encoder stopped");
       },
       [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); },
       [this] { ended_(); });
@@ -112,7 +113,7 @@ class RecordingPipelineImpl {
     if (meeting_buffer_.empty() || microphone_buffer_.empty()) return;
     auto mixed = mixer_.mix(meeting_buffer_, microphone_buffer_); meeting_buffer_.clear(); microphone_buffer_.clear();
     std::scoped_lock writer_lock(writer_mutex_);
-    if (writer_.is_open() && !writer_.write_audio(mixed, time)) fail("Audio encoder stopped");
+    if (writer_.is_open() && !writer_.write_audio(mixed, time)) fail_encoder("Audio encoder stopped");
   }
   void component_health(RecordingComponent component, bool ok, const char* message) {
     { std::scoped_lock lock(state_mutex_); ok ? readiness_.ready(component) : readiness_.failed(component); }
@@ -120,6 +121,12 @@ class RecordingPipelineImpl {
   }
   void mark(RecordingComponent component) { component_health(component, true, "Recording component ready"); }
   bool fail(const char* message) { health_(false, message); return false; }
+  bool fail_encoder(const char* message) {
+    char detail[96]{};
+    std::snprintf(detail, sizeof(detail), "%s (HRESULT 0x%08lX)", message,
+      static_cast<unsigned long>(writer_.last_error()));
+    return fail(detail);
+  }
   RecordingPipeline::HealthCallback health_; mutable std::mutex state_mutex_, audio_mutex_, writer_mutex_, video_attach_mutex_; std::condition_variable state_changed_;
   RecordingPipeline::EndedCallback ended_;
   MeetingWindowWatchdog watchdog_;

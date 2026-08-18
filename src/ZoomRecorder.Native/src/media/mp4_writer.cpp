@@ -70,11 +70,14 @@ class Mp4WriterImpl {
     if (FAILED(copied) || FAILED(buffer->SetCurrentLength(length))) return false;
     ComPtr<IMFSample> sample; MFCreateSample(&sample); sample->AddBuffer(buffer.Get());
     const auto time = normalize(timestamp, first_video_); sample->SetSampleTime(time); sample->SetSampleDuration(frame_duration_);
-    return SUCCEEDED(writer_->WriteSample(video_stream_, sample.Get()));
+    last_error_ = writer_->WriteSample(video_stream_, sample.Get());
+    if (SUCCEEDED(last_error_)) video_started_ = true;
+    return SUCCEEDED(last_error_);
   }
 
   bool write_audio(std::span<const float> audio, std::int64_t) {
     if (!writer_ || audio.empty() || audio.size() % 2 != 0) return false;
+    if (!video_started_) return true;
     const auto bytes = static_cast<DWORD>(audio.size_bytes()); ComPtr<IMFMediaBuffer> buffer;
     if (FAILED(MFCreateMemoryBuffer(bytes, &buffer))) return false;
     BYTE* target{}; if (FAILED(buffer->Lock(&target, nullptr, nullptr))) return false;
@@ -82,7 +85,8 @@ class Mp4WriterImpl {
     ComPtr<IMFSample> sample; MFCreateSample(&sample); sample->AddBuffer(buffer.Get());
     const auto timing = audio_timeline_.next(audio.size());
     sample->SetSampleTime(timing.timestamp); sample->SetSampleDuration(timing.duration);
-    return SUCCEEDED(writer_->WriteSample(audio_stream_, sample.Get()));
+    last_error_ = writer_->WriteSample(audio_stream_, sample.Get());
+    return SUCCEEDED(last_error_);
   }
 
   bool finalize() {
@@ -94,6 +98,7 @@ class Mp4WriterImpl {
     return final_result_;
   }
   bool is_open() const { return writer_ != nullptr && !finalized_; }
+  long last_error() const { return last_error_; }
   ID3D11Device* device() const { return device_.Get(); }
   const std::wstring& final_path() const { return final_path_; }
 
@@ -102,7 +107,7 @@ class Mp4WriterImpl {
   void shutdown() { if (mf_started_) { MFShutdown(); mf_started_ = false; } }
   ComPtr<IMFSinkWriter> writer_; ComPtr<ID3D11Device> device_; ComPtr<IMFDXGIDeviceManager> device_manager_;
   UINT device_reset_token_{}; DWORD video_stream_{}, audio_stream_{}; std::int64_t frame_duration_{};
-  std::int64_t first_video_{-1}; AudioSampleTimeline audio_timeline_{48000, 2}; bool mf_started_{}, finalized_{}, final_result_{};
+  std::int64_t first_video_{-1}; AudioSampleTimeline audio_timeline_{48000, 2}; long last_error_{}; bool video_started_{}, mf_started_{}, finalized_{}, final_result_{};
   std::wstring final_path_, partial_path_;
 };
 
@@ -113,5 +118,6 @@ bool Mp4Writer::write_video(ID3D11Texture2D* value, std::int64_t time) { return 
 bool Mp4Writer::write_audio(std::span<const float> value, std::int64_t time) { return impl_->write_audio(value, time); }
 bool Mp4Writer::finalize() { return impl_->finalize(); }
 bool Mp4Writer::is_open() const { return impl_->is_open(); }
+long Mp4Writer::last_error() const { return impl_->last_error(); }
 ID3D11Device* Mp4Writer::device() const { return impl_->device(); }
 const std::wstring& Mp4Writer::final_path() const { return impl_->final_path(); }

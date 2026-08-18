@@ -17,6 +17,7 @@ class Mp4Writer {
   bool write_audio(std::span<const float> interleaved_stereo, std::int64_t timestamp_100ns);
   bool finalize();
   bool is_open() const;
+  long last_error() const;
   ID3D11Device* device() const;
   const std::wstring& final_path() const;
  private:
