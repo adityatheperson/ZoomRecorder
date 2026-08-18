@@ -1,6 +1,7 @@
 #include "recording_pipeline.h"
 #include "audio_mixer.h"
 #include "meeting_region_source.h"
+#include "meeting_window_watchdog.h"
 #include "mp4_writer.h"
 #include "recording_readiness.h"
 #include "wasapi_source.h"
@@ -10,6 +11,7 @@
 #include <vector>
 #include <chrono>
 #include <algorithm>
+#include <thread>
 
 namespace {
 std::vector<float> normalize_audio(std::span<const float> input, unsigned rate, unsigned short channels) {
@@ -36,6 +38,7 @@ class RecordingPipelineImpl {
  public:
   RecordingPipelineImpl(RecordingPipeline::HealthCallback health, RecordingPipeline::EndedCallback ended)
       : health_(std::move(health)), ended_(std::move(ended)), mixer_({48000, 2}) {}
+  ~RecordingPipelineImpl() { stop_watchdog(); }
 
   bool start(const std::wstring& output) {
     if (output.empty()) return fail("Recording output path is unavailable");
@@ -75,16 +78,33 @@ class RecordingPipelineImpl {
       [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); },
       [this] { ended_(); });
     if (!video_->start()) { video_.reset(); return false; }
+    start_watchdog(meeting_window);
     return true;
   }
 
   bool stop_and_finalize() {
+    stop_watchdog();
     if (microphone_) microphone_->stop(); if (meeting_audio_) meeting_audio_->stop(); if (video_) video_->stop();
     std::scoped_lock lock(writer_mutex_); return writer_.finalize();
   }
   bool is_ready() const { std::scoped_lock lock(state_mutex_); return readiness_.can_enter_before_video(); }
 
  private:
+  void start_watchdog(HWND window) {
+    watchdog_worker_ = std::jthread([this, window](std::stop_token stop) {
+      while (!stop.stop_requested()) {
+        if (watchdog_.observe(IsWindow(window) != FALSE, IsWindowVisible(window) != FALSE)) {
+          ended_();
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      }
+    });
+  }
+  void stop_watchdog() {
+    watchdog_worker_.request_stop();
+    if (watchdog_worker_.joinable() && watchdog_worker_.get_id() != std::this_thread::get_id()) watchdog_worker_.join();
+  }
   void audio(bool microphone, std::span<const float> samples, unsigned rate, unsigned short channels, std::int64_t time) {
     std::scoped_lock lock(audio_mutex_);
     auto& target = microphone ? microphone_buffer_ : meeting_buffer_; target = normalize_audio(samples, rate, channels);
@@ -102,6 +122,8 @@ class RecordingPipelineImpl {
   bool fail(const char* message) { health_(false, message); return false; }
   RecordingPipeline::HealthCallback health_; mutable std::mutex state_mutex_, audio_mutex_, writer_mutex_, video_attach_mutex_; std::condition_variable state_changed_;
   RecordingPipeline::EndedCallback ended_;
+  MeetingWindowWatchdog watchdog_;
+  std::jthread watchdog_worker_;
   RecordingReadiness readiness_; AudioMixer mixer_; Mp4Writer writer_;
   std::unique_ptr<MeetingRegionSource> video_; std::unique_ptr<WasapiSource> meeting_audio_, microphone_;
   std::vector<float> meeting_buffer_, microphone_buffer_;
