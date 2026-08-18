@@ -161,6 +161,21 @@ public sealed class RecordingAssignmentServiceTests
         public Task AssignRecordingAsync(Guid recordingId, Guid? classId, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public Task AssignRecordingToClassAsync(
+            Guid recordingId,
+            Guid classId,
+            string? meetingIdToRemember,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ClassRecord> CreateClassAndAssignRecordingAsync(
+            string name,
+            string? term,
+            Guid recordingId,
+            string? meetingIdToRemember,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<MeetingClassMapping?> FindMappingAsync(string meetingId, CancellationToken cancellationToken)
         {
             FindMappingCallCount++;

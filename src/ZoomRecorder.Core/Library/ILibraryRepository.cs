@@ -10,6 +10,17 @@ public interface ILibraryRepository
     Task<IReadOnlyList<RecordingRecord>> ListUnassignedRecordingsAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<RecordingRecord>> SearchClassRecordingsAsync(Guid classId, string query, CancellationToken cancellationToken);
     Task AssignRecordingAsync(Guid recordingId, Guid? classId, CancellationToken cancellationToken);
+    Task AssignRecordingToClassAsync(
+        Guid recordingId,
+        Guid classId,
+        string? meetingIdToRemember,
+        CancellationToken cancellationToken);
+    Task<ClassRecord> CreateClassAndAssignRecordingAsync(
+        string name,
+        string? term,
+        Guid recordingId,
+        string? meetingIdToRemember,
+        CancellationToken cancellationToken);
     Task<MeetingClassMapping?> FindMappingAsync(string meetingId, CancellationToken cancellationToken);
     Task UpsertMappingAsync(MeetingClassMapping mapping, CancellationToken cancellationToken);
     Task ForgetMappingAsync(string meetingId, CancellationToken cancellationToken);

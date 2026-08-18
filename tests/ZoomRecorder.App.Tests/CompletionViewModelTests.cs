@@ -131,6 +131,21 @@ public sealed class CompletionViewModelTests
         public Task AssignRecordingAsync(Guid recordingId, Guid? classId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task AssignRecordingToClassAsync(
+            Guid recordingId,
+            Guid classId,
+            string? meetingIdToRemember,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ClassRecord> CreateClassAndAssignRecordingAsync(
+            string name,
+            string? term,
+            Guid recordingId,
+            string? meetingIdToRemember,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<MeetingClassMapping?> FindMappingAsync(string meetingId, CancellationToken cancellationToken) =>
             Task.FromResult<MeetingClassMapping?>(null);
 

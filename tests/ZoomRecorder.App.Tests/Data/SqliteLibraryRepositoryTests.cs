@@ -104,6 +104,178 @@ public sealed class SqliteLibraryRepositoryTests
     }
 
     [Fact]
+    public async Task Atomic_existing_assignment_rolls_back_when_cancelled_after_recording_update()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var originalClass = await repository.CreateClassAsync("Original", null, default);
+        var targetClass = await repository.CreateClassAsync("Target", null, default);
+        var recording = await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), originalClass.Id, temp.File("atomic-existing.mp4"), "meeting-42"),
+            default);
+        var originalMapping = new MeetingClassMapping("meeting-42", originalClass.Id);
+        await repository.UpsertMappingAsync(originalMapping, default);
+        using var cancellation = new CancellationTokenSource();
+        database.Connection.CreateFunction("cancel_after_assignment", () =>
+        {
+            cancellation.Cancel();
+            return 0;
+        });
+        await using (var trigger = database.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER cancel_after_recording_assignment
+                AFTER UPDATE OF class_id ON recordings
+                BEGIN
+                    SELECT cancel_after_assignment();
+                END;
+                """;
+            await trigger.ExecuteNonQueryAsync();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.AssignRecordingToClassAsync(
+            recording.Id,
+            targetClass.Id,
+            "meeting-42",
+            cancellation.Token));
+
+        Assert.Equal(
+            originalClass.Id,
+            Assert.Single(await repository.ListRecordingsAsync(originalClass.Id, default)).ClassId);
+        Assert.Empty(await repository.ListRecordingsAsync(targetClass.Id, default));
+        Assert.Equal(originalMapping, await repository.FindMappingAsync("meeting-42", default));
+    }
+
+    [Fact]
+    public async Task Atomic_existing_assignment_commits_assignment_and_mapping_together()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var originalClass = await repository.CreateClassAsync("Original", null, default);
+        var targetClass = await repository.CreateClassAsync("Target", null, default);
+        var recording = await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), originalClass.Id, temp.File("atomic-existing-success.mp4"), "meeting-42"),
+            default);
+
+        await repository.AssignRecordingToClassAsync(
+            recording.Id, targetClass.Id, "meeting-42", CancellationToken.None);
+
+        Assert.Equal(
+            targetClass.Id,
+            Assert.Single(await repository.ListRecordingsAsync(targetClass.Id, default)).ClassId);
+        Assert.Equal(
+            new MeetingClassMapping("meeting-42", targetClass.Id),
+            await repository.FindMappingAsync("meeting-42", default));
+    }
+
+    [Fact]
+    public async Task Atomic_create_and_assign_rolls_back_class_assignment_and_mapping_on_late_failure()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var originalClass = await repository.CreateClassAsync("Original", null, default);
+        var recording = await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), originalClass.Id, temp.File("atomic-create.mp4"), "meeting-42"),
+            default);
+        var originalMapping = new MeetingClassMapping("meeting-42", originalClass.Id);
+        await repository.UpsertMappingAsync(originalMapping, default);
+        await using (var trigger = database.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER fail_new_class_mapping
+                BEFORE INSERT ON meeting_class_mappings
+                WHEN NEW.meeting_id = 'new-meeting'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced mapping failure');
+                END;
+                """;
+            await trigger.ExecuteNonQueryAsync();
+        }
+
+        await Assert.ThrowsAsync<SqliteException>(() => repository.CreateClassAndAssignRecordingAsync(
+            "Physics",
+            "Fall 2026",
+            recording.Id,
+            "new-meeting",
+            CancellationToken.None));
+
+        Assert.Equal([originalClass], await repository.ListClassesAsync(includeArchived: false, default));
+        Assert.Equal(
+            originalClass.Id,
+            Assert.Single(await repository.ListRecordingsAsync(originalClass.Id, default)).ClassId);
+        Assert.Null(await repository.FindMappingAsync("new-meeting", default));
+        Assert.Equal(originalMapping, await repository.FindMappingAsync("meeting-42", default));
+    }
+
+    [Fact]
+    public async Task Atomic_create_and_assign_rolls_back_every_mutation_when_cancelled_after_mapping()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var originalClass = await repository.CreateClassAsync("Original", null, default);
+        var recording = await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), originalClass.Id, temp.File("atomic-create-cancel.mp4"), "meeting-42"),
+            default);
+        using var cancellation = new CancellationTokenSource();
+        database.Connection.CreateFunction("cancel_after_mapping", () =>
+        {
+            cancellation.Cancel();
+            return 0;
+        });
+        await using (var trigger = database.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER cancel_after_new_class_mapping
+                AFTER INSERT ON meeting_class_mappings
+                WHEN NEW.meeting_id = 'cancel-create'
+                BEGIN
+                    SELECT cancel_after_mapping();
+                END;
+                """;
+            await trigger.ExecuteNonQueryAsync();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.CreateClassAndAssignRecordingAsync(
+            "Physics",
+            "Fall 2026",
+            recording.Id,
+            "cancel-create",
+            cancellation.Token));
+
+        Assert.Equal([originalClass], await repository.ListClassesAsync(includeArchived: false, default));
+        Assert.Equal(
+            originalClass.Id,
+            Assert.Single(await repository.ListRecordingsAsync(originalClass.Id, default)).ClassId);
+        Assert.Null(await repository.FindMappingAsync("cancel-create", default));
+    }
+
+    [Fact]
+    public async Task Atomic_create_and_assign_commits_class_assignment_and_mapping_together()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var recording = await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), null, temp.File("atomic-create-success.mp4"), "meeting-42"),
+            default);
+
+        var created = await repository.CreateClassAndAssignRecordingAsync(
+            "Physics", "Fall 2026", recording.Id, "meeting-42", CancellationToken.None);
+
+        Assert.Equal(created, Assert.Single(await repository.ListClassesAsync(false, default)));
+        Assert.Equal(
+            created.Id,
+            Assert.Single(await repository.ListRecordingsAsync(created.Id, default)).ClassId);
+        Assert.Equal(
+            new MeetingClassMapping("meeting-42", created.Id),
+            await repository.FindMappingAsync("meeting-42", default));
+    }
+
+    [Fact]
     public async Task Mapping_upsert_find_and_forget_work_and_foreign_keys_reject_missing_classes()
     {
         using var temp = new TestDirectory();

@@ -161,14 +161,7 @@ public sealed class AssignRecordingViewModelTests
             new(id, name, null, new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero), archived);
 
         public Task<ClassRecord> CreateClassAsync(string name, string? term, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var item = new ClassRecord(
-                Guid.NewGuid(), name, term,
-                new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero), false);
-            Classes.Add(item);
-            return Task.FromResult(item);
-        }
+            => throw new NotSupportedException("Assignments must use the atomic repository operation.");
 
         public Task<RecordingRecord> AddRecordingAsync(RecordingRecord recording, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -194,23 +187,54 @@ public sealed class AssignRecordingViewModelTests
             Task.FromResult<IReadOnlyList<RecordingRecord>>([]);
 
         public Task AssignRecordingAsync(Guid recordingId, Guid? classId, CancellationToken cancellationToken)
+            => throw new NotSupportedException("Assignments must use the atomic repository operation.");
+
+        public Task AssignRecordingToClassAsync(
+            Guid recordingId,
+            Guid classId,
+            string? meetingIdToRemember,
+            CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal(RecordingId, recordingId);
             AssignedClassId = classId;
+            if (meetingIdToRemember is not null)
+            {
+                UpsertMappingCallCount++;
+                Mapping = new MeetingClassMapping(meetingIdToRemember, classId);
+            }
+
             return Task.CompletedTask;
+        }
+
+        public Task<ClassRecord> CreateClassAndAssignRecordingAsync(
+            string name,
+            string? term,
+            Guid recordingId,
+            string? meetingIdToRemember,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(RecordingId, recordingId);
+            var item = new ClassRecord(
+                Guid.NewGuid(), name, term,
+                new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero), false);
+            Classes.Add(item);
+            AssignedClassId = item.Id;
+            if (meetingIdToRemember is not null)
+            {
+                UpsertMappingCallCount++;
+                Mapping = new MeetingClassMapping(meetingIdToRemember, item.Id);
+            }
+
+            return Task.FromResult(item);
         }
 
         public Task<MeetingClassMapping?> FindMappingAsync(string meetingId, CancellationToken cancellationToken) =>
             Task.FromResult(Mapping);
 
         public Task UpsertMappingAsync(MeetingClassMapping mapping, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            UpsertMappingCallCount++;
-            Mapping = mapping;
-            return Task.CompletedTask;
-        }
+            => throw new NotSupportedException("Assignments must use the atomic repository operation.");
 
         public Task ForgetMappingAsync(string meetingId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

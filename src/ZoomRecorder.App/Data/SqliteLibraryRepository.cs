@@ -33,17 +33,7 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
         return WithConnectionAsync(async connection =>
         {
             var classRecord = new ClassRecord(Guid.NewGuid(), name, term, _utcNow(), false);
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                INSERT INTO classes(id, name, term, created_at, is_archived)
-                VALUES ($id, $name, $term, $createdAt, $isArchived);
-                """;
-            command.Parameters.AddWithValue("$id", GuidText(classRecord.Id));
-            command.Parameters.AddWithValue("$name", classRecord.Name);
-            command.Parameters.AddWithValue("$term", DbValue(classRecord.Term));
-            command.Parameters.AddWithValue("$createdAt", TimestampText(classRecord.CreatedAt));
-            command.Parameters.AddWithValue("$isArchived", BooleanInteger(classRecord.IsArchived));
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await InsertClassAsync(connection, transaction: null, classRecord, cancellationToken);
             return classRecord;
         }, cancellationToken);
     }
@@ -166,14 +156,70 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
         Guid recordingId,
         Guid? classId,
         CancellationToken cancellationToken) =>
-        WithConnectionAsync(async connection =>
+        WithConnectionAsync(
+            connection => UpdateRecordingClassAsync(
+                connection, transaction: null, recordingId, classId, cancellationToken),
+            cancellationToken);
+
+    public Task AssignRecordingToClassAsync(
+        Guid recordingId,
+        Guid classId,
+        string? meetingIdToRemember,
+        CancellationToken cancellationToken)
+    {
+        ValidateOptionalMeetingId(meetingIdToRemember);
+
+        return WithTransactionAsync(async (connection, transaction) =>
         {
-            await using var command = connection.CreateCommand();
-            command.CommandText = "UPDATE recordings SET class_id = $classId WHERE id = $recordingId;";
-            command.Parameters.AddWithValue("$classId", DbGuid(classId));
-            command.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await UpdateRecordingClassAsync(
+                connection, transaction, recordingId, classId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (meetingIdToRemember is not null)
+            {
+                await UpsertMappingAsync(
+                    connection,
+                    transaction,
+                    new MeetingClassMapping(meetingIdToRemember, classId),
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
         }, cancellationToken);
+    }
+
+    public Task<ClassRecord> CreateClassAndAssignRecordingAsync(
+        string name,
+        string? term,
+        Guid recordingId,
+        string? meetingIdToRemember,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ValidateOptionalMeetingId(meetingIdToRemember);
+
+        return WithTransactionAsync(async (connection, transaction) =>
+        {
+            var classRecord = new ClassRecord(Guid.NewGuid(), name, term, _utcNow(), false);
+            await InsertClassAsync(connection, transaction, classRecord, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await UpdateRecordingClassAsync(
+                connection, transaction, recordingId, classRecord.Id, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (meetingIdToRemember is not null)
+            {
+                await UpsertMappingAsync(
+                    connection,
+                    transaction,
+                    new MeetingClassMapping(meetingIdToRemember, classRecord.Id),
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            return classRecord;
+        }, cancellationToken);
+    }
 
     public Task<MeetingClassMapping?> FindMappingAsync(
         string meetingId,
@@ -201,15 +247,8 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
 
         return WithConnectionAsync(async connection =>
         {
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                INSERT INTO meeting_class_mappings(meeting_id, class_id)
-                VALUES ($meetingId, $classId)
-                ON CONFLICT(meeting_id) DO UPDATE SET class_id = excluded.class_id;
-                """;
-            command.Parameters.AddWithValue("$meetingId", mapping.MeetingId);
-            command.Parameters.AddWithValue("$classId", GuidText(mapping.ClassId));
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await UpsertMappingAsync(
+                connection, transaction: null, mapping, cancellationToken);
         }, cancellationToken);
     }
 
@@ -277,6 +316,106 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
         finally
         {
             _database.Gate.Release();
+        }
+    }
+
+    private Task WithTransactionAsync(
+        Func<SqliteConnection, SqliteTransaction, Task> operation,
+        CancellationToken cancellationToken) =>
+        WithTransactionAsync<object?>(async (connection, transaction) =>
+        {
+            await operation(connection, transaction);
+            return null;
+        }, cancellationToken);
+
+    private async Task<T> WithTransactionAsync<T>(
+        Func<SqliteConnection, SqliteTransaction, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        return await WithConnectionAsync(async connection =>
+        {
+            await using var transaction =
+                (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            try
+            {
+                var result = await operation(connection, transaction);
+                cancellationToken.ThrowIfCancellationRequested();
+                await transaction.CommitAsync(cancellationToken);
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    await transaction.RollbackAsync(CancellationToken.None);
+                }
+                catch
+                {
+                }
+
+                throw;
+            }
+        }, cancellationToken);
+    }
+
+    private static async Task InsertClassAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        ClassRecord classRecord,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO classes(id, name, term, created_at, is_archived)
+            VALUES ($id, $name, $term, $createdAt, $isArchived);
+            """;
+        command.Parameters.AddWithValue("$id", GuidText(classRecord.Id));
+        command.Parameters.AddWithValue("$name", classRecord.Name);
+        command.Parameters.AddWithValue("$term", DbValue(classRecord.Term));
+        command.Parameters.AddWithValue("$createdAt", TimestampText(classRecord.CreatedAt));
+        command.Parameters.AddWithValue("$isArchived", BooleanInteger(classRecord.IsArchived));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpdateRecordingClassAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        Guid recordingId,
+        Guid? classId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE recordings SET class_id = $classId WHERE id = $recordingId;";
+        command.Parameters.AddWithValue("$classId", DbGuid(classId));
+        command.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertMappingAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        MeetingClassMapping mapping,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO meeting_class_mappings(meeting_id, class_id)
+            VALUES ($meetingId, $classId)
+            ON CONFLICT(meeting_id) DO UPDATE SET class_id = excluded.class_id;
+            """;
+        command.Parameters.AddWithValue("$meetingId", mapping.MeetingId);
+        command.Parameters.AddWithValue("$classId", GuidText(mapping.ClassId));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static void ValidateOptionalMeetingId(string? meetingId)
+    {
+        if (meetingId is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(meetingId);
         }
     }
 

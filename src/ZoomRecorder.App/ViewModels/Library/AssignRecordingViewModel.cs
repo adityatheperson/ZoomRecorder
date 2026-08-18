@@ -31,8 +31,11 @@ public sealed class AssignRecordingViewModel
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        await _repository.AssignRecordingAsync(_recording.Id, classId, cancellationToken);
-        await RememberMeetingAsync(classId, rememberMeeting, cancellationToken);
+        await _repository.AssignRecordingToClassAsync(
+            _recording.Id,
+            classId,
+            rememberMeeting ? _meetingId : null,
+            cancellationToken);
     }
 
     public async Task<ClassRecord> CreateAndAssignAsync(
@@ -48,27 +51,11 @@ public sealed class AssignRecordingViewModel
             throw new ArgumentException("Enter a class name.", nameof(name));
         }
 
-        var created = await _repository.CreateClassAsync(
+        return await _repository.CreateClassAndAssignRecordingAsync(
             normalizedName,
             NormalizeOptional(term),
-            cancellationToken);
-        await _repository.AssignRecordingAsync(_recording.Id, created.Id, cancellationToken);
-        await RememberMeetingAsync(created.Id, rememberMeeting, cancellationToken);
-        return created;
-    }
-
-    private Task RememberMeetingAsync(
-        Guid classId,
-        bool rememberMeeting,
-        CancellationToken cancellationToken)
-    {
-        if (!rememberMeeting || _meetingId is null)
-        {
-            return Task.CompletedTask;
-        }
-
-        return _repository.UpsertMappingAsync(
-            new MeetingClassMapping(_meetingId, classId),
+            _recording.Id,
+            rememberMeeting ? _meetingId : null,
             cancellationToken);
     }
 
