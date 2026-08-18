@@ -1,0 +1,84 @@
+<Page
+    x:Class="ZoomRecorder.App.Views.Library.ClassDetailPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:libraryVm="using:ZoomRecorder.App.ViewModels.Library">
+    <Grid Padding="36" MaxWidth="1100" HorizontalAlignment="Center">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="14">
+            <Button Content="Back to classes" HorizontalAlignment="Left" Click="BackClicked" />
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="{Binding ClassName}" Style="{ThemeResource TitleTextBlockStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{Binding Term}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="·" />
+                        <TextBlock Text="{Binding LectureCount}" />
+                        <TextBlock Text="lectures" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button Content="Record a class" Click="RecordClassClicked" />
+                    <Button Content="Open study guide" Style="{ThemeResource AccentButtonStyle}" Click="OpenStudyGuideClicked" />
+                </StackPanel>
+            </Grid>
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBox x:Name="SearchTextBox" PlaceholderText="Search this class by file name" />
+                <Button Grid.Column="1" Content="Search" Click="SearchClicked" />
+            </Grid>
+            <StackPanel x:Name="ErrorPanel" Spacing="8">
+                <TextBlock Text="{Binding ErrorMessage}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
+                <Button Content="Retry library" HorizontalAlignment="Left" Click="RetryClicked" />
+            </StackPanel>
+        </StackPanel>
+
+        <TabView Grid.Row="1" x:Name="DetailsTabs" Margin="0,18,0,0" IsAddTabButtonVisible="False">
+            <TabViewItem Header="Lectures">
+                <Grid>
+                    <StackPanel x:Name="NoLecturesPanel" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="No lectures in this class yet." Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Center" Click="RecordClassClicked" />
+                    </StackPanel>
+                    <ListView x:Name="LecturesList" ItemsSource="{Binding Lectures}" SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="libraryVm:RecordingListItem">
+                                <Grid Padding="12,10" ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{x:Bind RecordedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{x:Bind DurationText}" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </TabViewItem>
+            <TabViewItem Header="Study guide">
+                <StackPanel Padding="20" Spacing="8">
+                    <TextBlock Text="Study guide pending" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Study materials will appear here after the later processing phase. No content has been generated yet." TextWrapping="Wrap" />
+                </StackPanel>
+            </TabViewItem>
+            <TabViewItem Header="Assignments">
+                <StackPanel Padding="20" Spacing="8">
+                    <TextBlock Text="No assignments yet" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Assignments will appear only after study processing finds them or you add them in a later phase." TextWrapping="Wrap" />
+                </StackPanel>
+            </TabViewItem>
+            <TabViewItem Header="Class settings">
+                <StackPanel Padding="20" Spacing="8">
+                    <TextBlock Text="Class settings are coming in the processing phase." Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Your class name, term, and recordings remain stored locally." TextWrapping="Wrap" />
+                </StackPanel>
+            </TabViewItem>
+        </TabView>
+    </Grid>
+</Page>

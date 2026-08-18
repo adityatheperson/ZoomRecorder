@@ -1,0 +1,60 @@
+<Page
+    x:Class="ZoomRecorder.App.Views.Library.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:libraryVm="using:ZoomRecorder.App.ViewModels.Library">
+    <ScrollViewer>
+        <StackPanel Padding="36" Spacing="20" MaxWidth="980" HorizontalAlignment="Center">
+            <StackPanel Spacing="6">
+                <TextBlock Text="Home" Style="{ThemeResource TitleTextBlockStyle}" />
+                <TextBlock Text="Keep every lecture organized locally, even when cloud services are unavailable." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Left" Click="RecordClassClicked" />
+
+            <StackPanel x:Name="LoadingPanel" Orientation="Horizontal" Spacing="10">
+                <ProgressRing IsActive="True" Width="20" Height="20" />
+                <TextBlock Text="Loading your class library…" VerticalAlignment="Center" />
+            </StackPanel>
+
+            <Border x:Name="UnavailablePanel" Padding="18" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                    <TextBlock x:Name="UnavailableText" Text="The class library is unavailable right now. You can still record a class." TextWrapping="Wrap" />
+                    <Button Content="Retry library" HorizontalAlignment="Left" Click="RetryClicked" />
+                </StackPanel>
+            </Border>
+
+            <StackPanel x:Name="LibraryContent" Spacing="20" Visibility="Collapsed">
+                <Border Padding="18" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Unassigned recordings" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding UnassignedCount}" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <Button Content="Review" Click="ReviewRecordingsClicked" />
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Recent recordings" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="NoRecentText" Text="No recordings yet. Record your first class when you are ready." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ListView x:Name="RecentList" ItemsSource="{Binding RecentRecordings}" SelectionMode="None">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="libraryVm:RecordingListItem">
+                                <Grid Padding="12,8" ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{x:Bind RecordedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{x:Bind AssignmentStatus}" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

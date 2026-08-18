@@ -1,0 +1,75 @@
+<Page
+    x:Class="ZoomRecorder.App.Views.Library.RecordingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:libraryVm="using:ZoomRecorder.App.ViewModels.Library">
+    <Grid Padding="36" MaxWidth="1100" HorizontalAlignment="Center">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <StackPanel Spacing="4">
+                <TextBlock Text="Recordings" Style="{ThemeResource TitleTextBlockStyle}" />
+                <TextBlock Text="Search every local recording and assign it to the right class." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+            <Button Grid.Column="1" Content="Record a class" Style="{ThemeResource AccentButtonStyle}" Click="RecordClassClicked" />
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="0,20,0,14" ColumnSpacing="8">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <TextBox x:Name="SearchTextBox" PlaceholderText="Search by file name" />
+            <Button Grid.Column="1" Content="Search" Click="SearchClicked" />
+        </Grid>
+
+        <StackPanel Grid.Row="2" x:Name="LoadingPanel" Orientation="Horizontal" Spacing="10">
+            <ProgressRing IsActive="True" Width="20" Height="20" />
+            <TextBlock Text="Loading recordings…" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <Border Grid.Row="2" x:Name="UnavailablePanel" Padding="18" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed" VerticalAlignment="Top">
+            <StackPanel Spacing="10">
+                <TextBlock x:Name="UnavailableText" Text="The class library is unavailable right now. You can still record a class." TextWrapping="Wrap" />
+                <Button Content="Retry library" HorizontalAlignment="Left" Click="RetryClicked" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="2" x:Name="EmptyPanel" Spacing="8" Visibility="Collapsed">
+            <TextBlock Text="No recordings found" Style="{ThemeResource SubtitleTextBlockStyle}" />
+            <TextBlock Text="Try another file name, or record a class to add your first lecture." TextWrapping="Wrap" />
+            <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Left" Click="RecordClassClicked" />
+        </StackPanel>
+
+        <ListView
+            Grid.Row="2"
+            x:Name="RecordingsList"
+            ItemsSource="{Binding Recordings}"
+            SelectionMode="None"
+            Visibility="Collapsed">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="libraryVm:RecordingListItem">
+                    <Grid Padding="12,10" ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="3">
+                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                                <Run Text="{x:Bind RecordedAtText}" /><Run Text=" · " /><Run Text="{x:Bind DurationText}" />
+                            </TextBlock>
+                        </StackPanel>
+                        <Border Grid.Column="1" Padding="10,4" CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Bind AssignmentStatus}" FontWeight="SemiBold" />
+                        </Border>
+                        <Button Grid.Column="2" Content="Assign to class" Click="AssignClicked" VerticalAlignment="Center" />
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</Page>

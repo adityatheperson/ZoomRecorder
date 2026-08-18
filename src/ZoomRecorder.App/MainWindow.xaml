@@ -3,5 +3,32 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Meeting Recorder">
-    <Frame x:Name="RootFrame" />
+    <NavigationView
+        x:Name="NavigationRoot"
+        PaneDisplayMode="Left"
+        IsBackButtonVisible="Visible"
+        IsSettingsVisible="True"
+        SelectionChanged="NavigationSelectionChanged"
+        BackRequested="NavigationBackRequested">
+        <NavigationView.MenuItems>
+            <NavigationViewItem x:Name="HomeNavigationItem" Content="Home" Tag="home">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE80F;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Name="ClassesNavigationItem" Content="Classes" Tag="classes">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE8F1;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem x:Name="RecordingsNavigationItem" Content="Recordings" Tag="recordings">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE714;" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+        <NavigationView.PaneFooter>
+            <Button
+                Content="Record a class"
+                Style="{ThemeResource AccentButtonStyle}"
+                HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Center"
+                Click="RecordClassClicked" />
+        </NavigationView.PaneFooter>
+        <Frame x:Name="RootFrame" />
+    </NavigationView>
 </Window>
