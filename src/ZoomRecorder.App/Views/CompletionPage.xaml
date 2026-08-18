@@ -11,8 +11,10 @@
             <StackPanel Orientation="Horizontal" Spacing="10">
                 <Button Content="Open recording" Style="{ThemeResource AccentButtonStyle}" Click="OpenRecording" />
                 <Button Content="Open folder" Click="OpenFolder" />
+                <Button Content="Assign to class" IsEnabled="{Binding CanAssign}" Click="AssignToClass" />
                 <Button Content="Done" Click="Done" />
             </StackPanel>
+            <TextBlock Text="{Binding AssignmentStatus}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
         </StackPanel>
     </Grid>
 </Page>

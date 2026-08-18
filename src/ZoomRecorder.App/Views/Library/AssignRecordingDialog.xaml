@@ -1,0 +1,31 @@
+<ContentDialog
+    x:Class="ZoomRecorder.App.Views.Library.AssignRecordingDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Assign recording to a class"
+    PrimaryButtonText="Assign"
+    SecondaryButtonText="Cancel"
+    DefaultButton="Primary"
+    PrimaryButtonClick="AssignRecording">
+    <StackPanel Spacing="12" MinWidth="420">
+        <RadioButton x:Name="ExistingClassOption" Content="Existing class" IsChecked="True" GroupName="AssignmentMode" />
+        <ComboBox
+            x:Name="ClassPicker"
+            Header="Class"
+            ItemsSource="{Binding Classes}"
+            DisplayMemberPath="Name"
+            PlaceholderText="Choose a class" />
+
+        <RadioButton x:Name="NewClassOption" Content="Create a new class" GroupName="AssignmentMode" Margin="0,8,0,0" />
+        <TextBox x:Name="ClassNameBox" Header="Class name" PlaceholderText="Biology 101" />
+        <TextBox x:Name="TermBox" Header="Term (optional)" PlaceholderText="Fall 2026" />
+
+        <CheckBox x:Name="RememberMeetingCheckBox">
+            <TextBlock Text="Remember this Zoom meeting for this class" TextWrapping="Wrap" />
+        </CheckBox>
+        <TextBlock
+            x:Name="ErrorText"
+            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+            TextWrapping="Wrap" />
+    </StackPanel>
+</ContentDialog>

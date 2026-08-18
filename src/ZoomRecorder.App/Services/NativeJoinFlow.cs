@@ -15,6 +15,7 @@ internal sealed class NativeJoinFlow : IJoinFlow
     private readonly FinalizationGate finalization = new();
     public event EventHandler<RecordingResult>? RecordingCompleted;
     public event EventHandler<string>? FinalizationFailed;
+    public string? CurrentMeetingId { get; private set; }
 
     public NativeJoinFlow(NativeSession session)
     {
@@ -26,12 +27,14 @@ internal sealed class NativeJoinFlow : IJoinFlow
     public async Task JoinAndRecordAsync(MeetingJoinRequest request, CancellationToken cancellationToken)
     {
         finalization.Reset();
+        CurrentMeetingId = null;
         var orchestrator = new MeetingOrchestrator(
             new NativeMeetingClient(session),
             recording,
             new LocalRecordingStore(),
             new MeetingLifecycle());
         await orchestrator.JoinAndRecordAsync(request, cancellationToken);
+        CurrentMeetingId = string.IsNullOrWhiteSpace(request.MeetingId) ? null : request.MeetingId.Trim();
     }
 
     private void NativeEventReceived(object? sender, string json)
