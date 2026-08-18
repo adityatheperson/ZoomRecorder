@@ -34,13 +34,19 @@ internal sealed class NativeJoinFlow : IJoinFlow
 
     private void NativeEventReceived(object? sender, string json)
     {
+        if (ShouldFinalize(json) && Interlocked.Exchange(ref finalizing, 1) == 0)
+            _ = FinalizeAsync();
+    }
+
+    internal static bool ShouldFinalize(string json)
+    {
         try
         {
             using var document = JsonDocument.Parse(json);
-            if (document.RootElement.TryGetProperty("type", out var type) && type.GetString() == "meeting_ended" && Interlocked.Exchange(ref finalizing, 1) == 0)
-                _ = FinalizeAsync();
+            if (!document.RootElement.TryGetProperty("type", out var type)) return false;
+            return type.GetString() is "meeting_ended" or "capture_ended";
         }
-        catch (JsonException) { }
+        catch (JsonException) { return false; }
     }
 
     private async Task FinalizeAsync()

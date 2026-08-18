@@ -10,7 +10,8 @@ class RecordingPipelineImpl;
 class RecordingPipeline {
  public:
   using HealthCallback = std::function<void(bool, const char*)>;
-  explicit RecordingPipeline(HealthCallback health);
+  using EndedCallback = std::function<void()>;
+  RecordingPipeline(HealthCallback health, EndedCallback ended);
   ~RecordingPipeline();
   bool start(const std::wstring& output_path);
   bool attach_video(HWND meeting_window);

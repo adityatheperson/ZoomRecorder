@@ -34,7 +34,8 @@ std::vector<float> normalize_audio(std::span<const float> input, unsigned rate, 
 
 class RecordingPipelineImpl {
  public:
-  explicit RecordingPipelineImpl(RecordingPipeline::HealthCallback health) : health_(std::move(health)), mixer_({48000, 2}) {}
+  RecordingPipelineImpl(RecordingPipeline::HealthCallback health, RecordingPipeline::EndedCallback ended)
+      : health_(std::move(health)), ended_(std::move(ended)), mixer_({48000, 2}) {}
 
   bool start(const std::wstring& output) {
     if (output.empty()) return fail("Recording output path is unavailable");
@@ -71,7 +72,8 @@ class RecordingPipelineImpl {
         std::scoped_lock lock(writer_mutex_);
         if (!writer_.write_video(texture, time)) fail("Video encoder stopped");
       },
-      [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); });
+      [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); },
+      [this] { ended_(); });
     if (!video_->start()) { video_.reset(); return false; }
     return true;
   }
@@ -99,13 +101,15 @@ class RecordingPipelineImpl {
   void mark(RecordingComponent component) { component_health(component, true, "Recording component ready"); }
   bool fail(const char* message) { health_(false, message); return false; }
   RecordingPipeline::HealthCallback health_; mutable std::mutex state_mutex_, audio_mutex_, writer_mutex_, video_attach_mutex_; std::condition_variable state_changed_;
+  RecordingPipeline::EndedCallback ended_;
   RecordingReadiness readiness_; AudioMixer mixer_; Mp4Writer writer_;
   std::unique_ptr<MeetingRegionSource> video_; std::unique_ptr<WasapiSource> meeting_audio_, microphone_;
   std::vector<float> meeting_buffer_, microphone_buffer_;
   std::wstring output_;
 };
 
-RecordingPipeline::RecordingPipeline(HealthCallback health) : impl_(std::make_unique<RecordingPipelineImpl>(std::move(health))) {}
+RecordingPipeline::RecordingPipeline(HealthCallback health, EndedCallback ended)
+    : impl_(std::make_unique<RecordingPipelineImpl>(std::move(health), std::move(ended))) {}
 RecordingPipeline::~RecordingPipeline() = default;
 bool RecordingPipeline::start(const std::wstring& path) { return impl_->start(path); }
 bool RecordingPipeline::attach_video(HWND window) { return impl_->attach_video(window); }

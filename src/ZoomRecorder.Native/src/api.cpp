@@ -37,7 +37,7 @@ zr_result zr_create(zr_handle* out_handle) {
     value->pipeline = std::make_unique<RecordingPipeline>([raw](bool ok, const char* message) {
       const std::string event = std::string{"{\"type\":\""} + (ok ? "component_ready" : "failed") + "\",\"message\":\"" + message + "\"}";
       emit(*raw, event.c_str());
-    });
+    }, [raw] { emit(*raw, R"({"type":"capture_ended"})"); });
 #ifdef ZR_WITH_ZOOM
     value->zoom = std::make_unique<ZoomMeetingClient>(
       [raw](const char* json) { emit(*raw, json); },
