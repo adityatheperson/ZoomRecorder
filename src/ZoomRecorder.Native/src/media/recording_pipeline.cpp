@@ -1,5 +1,6 @@
 #include "recording_pipeline.h"
 #include "audio_mixer.h"
+#include "capture_crop.h"
 #include "meeting_region_source.h"
 #include "mp4_writer.h"
 #include "recording_readiness.h"
@@ -37,8 +38,17 @@ class RecordingPipelineImpl {
   explicit RecordingPipelineImpl(RecordingPipeline::HealthCallback health) : health_(std::move(health)), mixer_({48000, 2}) {}
 
   bool start(HWND host, const std::wstring& output) {
-    RECT bounds{}; if (!IsWindow(host) || !GetClientRect(host, &bounds)) return fail("Meeting capture area unavailable");
-    const auto width = static_cast<unsigned>(bounds.right - bounds.left), height = static_cast<unsigned>(bounds.bottom - bounds.top);
+    if (!IsWindow(host)) return fail("Meeting capture area unavailable");
+    const auto capture_window = GetAncestor(host, GA_ROOT);
+    RECT host_bounds{}, capture_bounds{};
+    if (!capture_window || !GetWindowRect(host, &host_bounds) || !GetWindowRect(capture_window, &capture_bounds))
+      return fail("Meeting capture area unavailable");
+    CaptureCrop visible{};
+    const auto capture_width = static_cast<UINT>(capture_bounds.right - capture_bounds.left);
+    const auto capture_height = static_cast<UINT>(capture_bounds.bottom - capture_bounds.top);
+    if (!calculate_capture_crop(host_bounds, capture_bounds, capture_width, capture_height, visible))
+      return fail("Meeting capture area is not visible");
+    const auto width = visible.width, height = visible.height;
     if (!writer_.open(output, width, height)) return fail("MP4 encoder or output file unavailable");
     mark(RecordingComponent::Encoder); mark(RecordingComponent::OutputFile);
     video_ = std::make_unique<MeetingRegionSource>(host, writer_.device(),

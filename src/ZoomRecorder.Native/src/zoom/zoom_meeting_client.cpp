@@ -7,6 +7,8 @@
 #include "zoom_sdk.h"
 
 #include <cctype>
+#include <chrono>
+#include <thread>
 #include <string_view>
 
 using namespace ZOOM_SDK_NAMESPACE;
@@ -46,6 +48,8 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
  public:
   explicit ZoomMeetingClientImpl(ZoomMeetingClient::EventSink sink) : sink_(std::move(sink)) {}
   ~ZoomMeetingClientImpl() override {
+    attach_worker_.request_stop();
+    if (attach_worker_.joinable()) attach_worker_.join();
     if (meeting_) { meeting_->SetEvent(nullptr); DestroyMeetingService(meeting_); }
     if (auth_) { auth_->SetEvent(nullptr); DestroyAuthService(auth_); }
     if (initialized_) CleanUPSDK();
@@ -96,7 +100,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
     switch (status) {
       case MEETING_STATUS_CONNECTING: sink_(R"({"type":"meeting_connecting"})"); break;
       case MEETING_STATUS_INMEETING:
-        attach_meeting_window(); sink_(R"({"type":"meeting_entered"})"); break;
+        start_attach_meeting_window(); sink_(R"({"type":"meeting_entered"})"); break;
       case MEETING_STATUS_ENDED:
         if (!ended_) { ended_ = true; sink_(R"({"type":"meeting_ended"})"); }
         break;
@@ -114,14 +118,36 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void onAppSignalPanelUpdated(IMeetingAppSignalHandler*) override {}
 
  private:
-  void attach_meeting_window() {
-    if (!host_ || !meeting_) return;
-    auto* ui = meeting_->GetUIController(); if (!ui) return;
-    HWND first{}, second{}; if (ui->GetMeetingUIWnd(first, second) != SDKERR_SUCCESS || !first) return;
-    SetParent(first, host_);
-    SetWindowLongPtrW(first, GWL_STYLE, (GetWindowLongPtrW(first, GWL_STYLE) | WS_CHILD) & ~WS_POPUP);
-    RECT bounds{}; GetClientRect(host_, &bounds); MoveWindow(first, 0, 0, bounds.right, bounds.bottom, TRUE);
-    ShowWindow(first, SW_SHOW);
+  bool attach_meeting_window() {
+    if (!host_ || !IsWindow(host_) || !meeting_) return false;
+    auto* ui = meeting_->GetUIController(); if (!ui) return false;
+    HWND first{}, second{}; if (ui->GetMeetingUIWnd(first, second) != SDKERR_SUCCESS) return false;
+    const auto meeting_window = IsWindow(first) ? first : (IsWindow(second) ? second : nullptr);
+    if (!meeting_window) return false;
+    ShowWindow(meeting_window, SW_HIDE);
+    SetLastError(ERROR_SUCCESS);
+    const auto previous_parent = SetParent(meeting_window, host_);
+    if (!previous_parent && GetLastError() != ERROR_SUCCESS) return false;
+    auto style = GetWindowLongPtrW(meeting_window, GWL_STYLE);
+    style = (style | WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN) & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
+    SetWindowLongPtrW(meeting_window, GWL_STYLE, style);
+    auto extended = GetWindowLongPtrW(meeting_window, GWL_EXSTYLE);
+    SetWindowLongPtrW(meeting_window, GWL_EXSTYLE, (extended | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
+    RECT bounds{}; GetClientRect(host_, &bounds); MoveWindow(meeting_window, 0, 0, bounds.right, bounds.bottom, TRUE);
+    SetWindowPos(meeting_window, HWND_TOP, 0, 0, bounds.right, bounds.bottom,
+                 SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    sink_(R"({"type":"meeting_window_attached"})");
+    return GetParent(meeting_window) == host_;
+  }
+  void start_attach_meeting_window() {
+    if (attach_worker_.joinable()) return;
+    attach_worker_ = std::jthread([this](std::stop_token stop) {
+      for (int attempt = 0; attempt < 50 && !stop.stop_requested(); ++attempt) {
+        if (attach_meeting_window()) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      if (!stop.stop_requested()) sink_(R"({"type":"failed","message":"Zoom meeting window could not be embedded"})");
+    });
   }
   int join() {
     if (join_called_) return 2;
@@ -145,6 +171,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   std::wstring meeting_id_, passcode_, display_name_, jwt_;
   bool initialized_{}, authenticated_{}, enter_requested_{}, join_called_{}, ended_{};
   HWND host_{};
+  std::jthread attach_worker_;
 };
 
 ZoomMeetingClient::ZoomMeetingClient(EventSink sink) : impl_(std::make_unique<ZoomMeetingClientImpl>(std::move(sink))) {}

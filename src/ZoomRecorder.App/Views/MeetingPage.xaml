@@ -18,7 +18,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <Ellipse Width="9" Height="9" Fill="#D93025" />
-                <TextBlock Text="Recording · 00:00:00" Foreground="#145C3D" FontWeight="SemiBold" />
+                <TextBlock x:Name="RecordingTimerText" Text="Recording · 00:00:00" Foreground="#145C3D" FontWeight="SemiBold" />
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
                 <TextBlock Text="Meeting audio ✓" Foreground="#145C3D" />
