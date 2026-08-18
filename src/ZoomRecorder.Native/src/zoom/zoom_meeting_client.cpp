@@ -46,7 +46,8 @@ std::wstring widen(const std::string& value) {
 
 class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingServiceEvent {
  public:
-  explicit ZoomMeetingClientImpl(ZoomMeetingClient::EventSink sink) : sink_(std::move(sink)) {}
+  ZoomMeetingClientImpl(ZoomMeetingClient::EventSink sink, ZoomMeetingClient::WindowSink window_sink)
+      : sink_(std::move(sink)), window_sink_(std::move(window_sink)) {}
   ~ZoomMeetingClientImpl() override {
     attach_worker_.request_stop();
     if (attach_worker_.joinable()) attach_worker_.join();
@@ -118,35 +119,25 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void onAppSignalPanelUpdated(IMeetingAppSignalHandler*) override {}
 
  private:
-  bool attach_meeting_window() {
-    if (!host_ || !IsWindow(host_) || !meeting_) return false;
+  bool publish_meeting_window() {
+    if (!meeting_) return false;
     auto* ui = meeting_->GetUIController(); if (!ui) return false;
     HWND first{}, second{}; if (ui->GetMeetingUIWnd(first, second) != SDKERR_SUCCESS) return false;
     const auto meeting_window = IsWindow(first) ? first : (IsWindow(second) ? second : nullptr);
     if (!meeting_window) return false;
-    ShowWindow(meeting_window, SW_HIDE);
-    SetLastError(ERROR_SUCCESS);
-    const auto previous_parent = SetParent(meeting_window, host_);
-    if (!previous_parent && GetLastError() != ERROR_SUCCESS) return false;
-    auto style = GetWindowLongPtrW(meeting_window, GWL_STYLE);
-    style = (style | WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN) & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
-    SetWindowLongPtrW(meeting_window, GWL_STYLE, style);
-    auto extended = GetWindowLongPtrW(meeting_window, GWL_EXSTYLE);
-    SetWindowLongPtrW(meeting_window, GWL_EXSTYLE, (extended | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
-    RECT bounds{}; GetClientRect(host_, &bounds); MoveWindow(meeting_window, 0, 0, bounds.right, bounds.bottom, TRUE);
-    SetWindowPos(meeting_window, HWND_TOP, 0, 0, bounds.right, bounds.bottom,
-                 SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-    sink_(R"({"type":"meeting_window_attached"})");
-    return GetParent(meeting_window) == host_;
+    ShowWindow(meeting_window, SW_SHOW);
+    window_sink_(meeting_window);
+    sink_(R"({"type":"meeting_window_ready"})");
+    return true;
   }
   void start_attach_meeting_window() {
     if (attach_worker_.joinable()) return;
     attach_worker_ = std::jthread([this](std::stop_token stop) {
       for (int attempt = 0; attempt < 50 && !stop.stop_requested(); ++attempt) {
-        if (attach_meeting_window()) return;
+        if (publish_meeting_window()) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
-      if (!stop.stop_requested()) sink_(R"({"type":"failed","message":"Zoom meeting window could not be embedded"})");
+      if (!stop.stop_requested()) sink_(R"({"type":"failed","message":"Zoom meeting window could not be found for recording"})");
     });
   }
   int join() {
@@ -166,6 +157,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   }
 
   ZoomMeetingClient::EventSink sink_;
+  ZoomMeetingClient::WindowSink window_sink_;
   IAuthService* auth_{};
   IMeetingService* meeting_{};
   std::wstring meeting_id_, passcode_, display_name_, jwt_;
@@ -174,7 +166,8 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   std::jthread attach_worker_;
 };
 
-ZoomMeetingClient::ZoomMeetingClient(EventSink sink) : impl_(std::make_unique<ZoomMeetingClientImpl>(std::move(sink))) {}
+ZoomMeetingClient::ZoomMeetingClient(EventSink sink, WindowSink window_sink)
+    : impl_(std::make_unique<ZoomMeetingClientImpl>(std::move(sink), std::move(window_sink))) {}
 ZoomMeetingClient::~ZoomMeetingClient() = default;
 int ZoomMeetingClient::prepare(const std::string& json) { return impl_->prepare(json); }
 int ZoomMeetingClient::enter() { return impl_->enter(); }

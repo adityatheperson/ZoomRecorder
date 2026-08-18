@@ -44,7 +44,7 @@ class MeetingRegionSourceImpl {
   bool start() {
     if (!IsWindow(target_)) { health_(false, "Zoom meeting window is unavailable"); return false; }
     capture_window_ = GetAncestor(target_, GA_ROOT);
-    if (!capture_window_ || capture_window_ == target_) { health_(false, "Zoom meeting host must be embedded in an app window"); return false; }
+    if (!capture_window_) { health_(false, "Zoom meeting window is unavailable"); return false; }
     if (!capture::GraphicsCaptureSession::IsSupported()) { health_(false, "Windows Graphics Capture is not supported or is disabled"); return false; }
     try {
       // WinUI invokes us on its existing STA thread. Reinitializing it as MTA

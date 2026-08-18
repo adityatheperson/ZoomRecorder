@@ -8,7 +8,10 @@
             <RowDefinition Height="40" />
         </Grid.RowDefinitions>
         <Grid Grid.Row="0" x:Name="ZoomHostSurface">
-            <TextBlock Text="Zoom meeting host" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                <TextBlock Text="Zoom meeting opened in its own window" Foreground="White" FontSize="22" HorizontalAlignment="Center" />
+                <TextBlock Text="Use the normal Zoom controls there. Keep this recorder running." Foreground="#9CA3AF" HorizontalAlignment="Center" />
+            </StackPanel>
         </Grid>
         <Grid Grid.Row="1" Background="#EAF7F1" Padding="12,0">
             <Grid.ColumnDefinitions>

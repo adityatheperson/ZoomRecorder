@@ -9,6 +9,7 @@ class RecordingReadiness {
   void ready(RecordingComponent component);
   void failed(RecordingComponent component);
   bool can_enter_meeting() const;
+  bool can_enter_before_video() const;
   bool has_failed() const;
  private:
   std::uint8_t ready_mask_{};

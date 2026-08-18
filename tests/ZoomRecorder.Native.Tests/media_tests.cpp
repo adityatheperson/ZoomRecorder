@@ -11,12 +11,13 @@ bool run_media_tests() {
   if (mixed.size() != 3 || std::abs(mixed[0] - 0.75f) > 0.001f || mixed[1] != 1.0f) return false;
 
   RecordingReadiness readiness;
-  readiness.ready(RecordingComponent::Video);
   readiness.ready(RecordingComponent::MeetingAudio);
   readiness.ready(RecordingComponent::Microphone);
   readiness.ready(RecordingComponent::Encoder);
-  if (readiness.can_enter_meeting()) return false;
   readiness.ready(RecordingComponent::OutputFile);
+  if (!readiness.can_enter_before_video()) return false;
+  if (readiness.can_enter_meeting()) return false;
+  readiness.ready(RecordingComponent::Video);
   if (!readiness.can_enter_meeting()) return false;
   readiness.failed(RecordingComponent::Microphone);
   return readiness.has_failed() && !readiness.can_enter_meeting();

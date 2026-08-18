@@ -39,7 +39,9 @@ zr_result zr_create(zr_handle* out_handle) {
       emit(*raw, event.c_str());
     });
 #ifdef ZR_WITH_ZOOM
-    value->zoom = std::make_unique<ZoomMeetingClient>([raw](const char* json) { emit(*raw, json); });
+    value->zoom = std::make_unique<ZoomMeetingClient>(
+      [raw](const char* json) { emit(*raw, json); },
+      [raw](HWND window) { if (raw->pipeline) raw->pipeline->attach_video(window); });
 #endif
     *out_handle = value.release(); return ZR_OK;
   }
@@ -89,7 +91,7 @@ zr_result zr_start_recording(zr_handle handle, const wchar_t* output_path) {
   auto& value = *static_cast<session*>(handle);
   std::scoped_lock lock(value.mutex);
   if (!value.prepared || value.recording_started) return ZR_INVALID_STATE;
-  if (!value.meeting_host || !value.pipeline->start(value.meeting_host, output_path)) return ZR_INTERNAL_ERROR;
+  if (!value.pipeline->start(output_path)) return ZR_INTERNAL_ERROR;
   value.recording_started = true; emit(value, R"({"type":"recording_started"})");
   return ZR_OK;
 }

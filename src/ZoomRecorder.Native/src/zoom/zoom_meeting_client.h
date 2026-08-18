@@ -10,7 +10,8 @@ class ZoomMeetingClientImpl;
 class ZoomMeetingClient {
  public:
   using EventSink = std::function<void(const char*)>;
-  explicit ZoomMeetingClient(EventSink sink);
+  using WindowSink = std::function<void(HWND)>;
+  ZoomMeetingClient(EventSink sink, WindowSink window_sink);
   ~ZoomMeetingClient();
   int prepare(const std::string& request_json);
   int enter();

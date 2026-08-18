@@ -11,22 +11,19 @@ namespace ZoomRecorder.App.Services;
 internal sealed class NativeJoinFlow : IJoinFlow
 {
     private readonly NativeSession session;
-    private readonly Func<nint> meetingHost;
     private readonly NativeRecordingSession recording;
     private int finalizing;
     public event EventHandler<RecordingResult>? RecordingCompleted;
 
-    public NativeJoinFlow(NativeSession session, Func<nint> meetingHost)
+    public NativeJoinFlow(NativeSession session)
     {
         this.session = session;
-        this.meetingHost = meetingHost;
         recording = new NativeRecordingSession(session);
         session.NativeEvent += NativeEventReceived;
     }
 
     public async Task JoinAndRecordAsync(MeetingJoinRequest request, CancellationToken cancellationToken)
     {
-        session.SetMeetingHost(meetingHost());
         var orchestrator = new MeetingOrchestrator(
             new NativeMeetingClient(session),
             recording,
