@@ -211,6 +211,51 @@ public sealed class SqliteLibraryRepositoryTests
     }
 
     [Fact]
+    public async Task Atomic_create_without_mapping_rolls_back_when_cancelled_after_class_insert()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var originalClass = await repository.CreateClassAsync("Original", null, default);
+        var recording = await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), originalClass.Id, temp.File("atomic-create-first-cancel.mp4"), "meeting-42"),
+            default);
+        var originalMapping = new MeetingClassMapping("meeting-42", originalClass.Id);
+        await repository.UpsertMappingAsync(originalMapping, default);
+        using var cancellation = new CancellationTokenSource();
+        database.Connection.CreateFunction("cancel_after_class_insert", () =>
+        {
+            cancellation.Cancel();
+            return 0;
+        });
+        await using (var trigger = database.Connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER cancel_after_new_class_insert
+                AFTER INSERT ON classes
+                BEGIN
+                    SELECT cancel_after_class_insert();
+                END;
+                """;
+            await trigger.ExecuteNonQueryAsync();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.CreateClassAndAssignRecordingAsync(
+            "Physics",
+            "Fall 2026",
+            recording.Id,
+            meetingIdToRemember: null,
+            cancellation.Token));
+
+        Assert.Equal([originalClass], await repository.ListClassesAsync(includeArchived: false, default));
+        Assert.Equal(
+            originalClass.Id,
+            Assert.Single(await repository.ListRecordingsAsync(originalClass.Id, default)).ClassId);
+        Assert.Equal(originalMapping, await repository.FindMappingAsync("meeting-42", default));
+        Assert.Null(await repository.FindMappingAsync("unrequested-meeting", default));
+    }
+
+    [Fact]
     public async Task Atomic_create_and_assign_rolls_back_every_mutation_when_cancelled_after_mapping()
     {
         using var temp = new TestDirectory();
