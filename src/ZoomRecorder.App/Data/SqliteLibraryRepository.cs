@@ -56,7 +56,7 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
 
         return WithConnectionAsync(async connection =>
         {
-            var canonicalRecording = recording with { FilePath = Path.GetFullPath(recording.FilePath) };
+            var canonicalRecording = recording with { FilePath = CanonicalizePath(recording.FilePath) };
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 INSERT INTO recordings(
@@ -85,12 +85,16 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalPath);
-        var fullPath = Path.GetFullPath(canonicalPath);
+        var fullPath = CanonicalizePath(canonicalPath);
 
         return WithConnectionAsync(async connection =>
         {
             await using var command = connection.CreateCommand();
-            command.CommandText = $"SELECT {RecordingColumns} FROM recordings WHERE file_path = $filePath;";
+            command.CommandText = $"""
+                SELECT {RecordingColumns}
+                FROM recordings
+                WHERE file_path = $filePath COLLATE {LibraryDatabase.WindowsPathCollation};
+                """;
             command.Parameters.AddWithValue("$filePath", fullPath);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             return await reader.ReadAsync(cancellationToken) ? ReadRecording(reader) : null;
@@ -141,21 +145,21 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
         CancellationToken cancellationToken) =>
         ReadRecordingsAsync("class_id IS NULL", null, cancellationToken);
 
-    public Task<IReadOnlyList<RecordingRecord>> SearchClassRecordingsAsync(
+    public async Task<IReadOnlyList<RecordingRecord>> SearchClassRecordingsAsync(
         Guid classId,
         string query,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        return ReadRecordingsAsync(
-            "class_id = $classId AND instr(lower(file_name), lower($query)) > 0",
-            command =>
-            {
-                command.Parameters.AddWithValue("$classId", GuidText(classId));
-                command.Parameters.AddWithValue("$query", query);
-            },
+        var classRecordings = await ReadRecordingsAsync(
+            "class_id = $classId",
+            command => command.Parameters.AddWithValue("$classId", GuidText(classId)),
             cancellationToken);
+
+        return classRecordings
+            .Where(recording => recording.FileName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
     }
 
     public Task AssignRecordingAsync(
@@ -297,6 +301,7 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
             reader.GetInt64(8) != 0);
 
     private static string GuidText(Guid value) => value.ToString("D", CultureInfo.InvariantCulture);
+    private static string CanonicalizePath(string path) => Path.GetFullPath(path);
     private static object DbGuid(Guid? value) => value is null ? DBNull.Value : GuidText(value.Value);
     private static object DbValue(string? value) => value is null ? DBNull.Value : value;
     private static long BooleanInteger(bool value) => value ? 1L : 0L;

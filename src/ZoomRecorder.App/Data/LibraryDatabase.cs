@@ -5,6 +5,7 @@ namespace ZoomRecorder.App.Data;
 public sealed class LibraryDatabase : IAsyncDisposable
 {
     private const int CurrentSchemaVersion = 1;
+    internal const string WindowsPathCollation = "WINDOWS_PATH";
 
     private LibraryDatabase(SqliteConnection connection)
     {
@@ -32,6 +33,9 @@ public sealed class LibraryDatabase : IAsyncDisposable
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = false
         }.ToString());
+        connection.CreateCollation(
+            WindowsPathCollation,
+            static (left, right) => string.Compare(left, right, StringComparison.OrdinalIgnoreCase));
 
         try
         {
@@ -85,7 +89,22 @@ public sealed class LibraryDatabase : IAsyncDisposable
             await CreateSchemaVersionOneAsync(connection, transaction, cancellationToken);
         }
 
+        await EnsureWindowsPathIndexAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task EnsureWindowsPathIndexAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            CREATE UNIQUE INDEX IF NOT EXISTS recordings_file_path_windows_unique
+            ON recordings(file_path COLLATE {WindowsPathCollation});
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task VerifySchemaVersionAsync(

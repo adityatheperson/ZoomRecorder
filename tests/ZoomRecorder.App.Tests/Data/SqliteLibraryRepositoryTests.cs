@@ -140,6 +140,34 @@ public sealed class SqliteLibraryRepositoryTests
     }
 
     [Fact]
+    public async Task Find_by_path_uses_Windows_case_insensitive_identity_and_preserves_stored_casing()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var originalPath = temp.File("LectureOne.mp4");
+        var added = await repository.AddRecordingAsync(Recording(Guid.NewGuid(), null, originalPath), default);
+
+        var found = await repository.FindRecordingByPathAsync(temp.File("lectureone.MP4"), default);
+
+        Assert.Equal(added, found);
+        Assert.Equal(Path.GetFullPath(originalPath), found!.FilePath);
+    }
+
+    [Fact]
+    public async Task Recording_unique_index_rejects_Windows_casing_variants()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        await repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), null, temp.File("LectureTwo.mp4")), default);
+
+        await Assert.ThrowsAsync<SqliteException>(() => repository.AddRecordingAsync(
+            Recording(Guid.NewGuid(), null, temp.File("lecturetwo.MP4")), default));
+    }
+
+    [Fact]
     public async Task Class_scoped_search_cannot_return_another_class_recording()
     {
         using var temp = new TestDirectory();
@@ -155,6 +183,21 @@ public sealed class SqliteLibraryRepositoryTests
         var results = await repository.SearchClassRecordingsAsync(biology.Id, "CELL", default);
 
         Assert.Equal(biologyRecording.Id, Assert.Single(results).Id);
+    }
+
+    [Fact]
+    public async Task Class_scoped_search_is_Unicode_case_insensitive()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var economics = await repository.CreateClassAsync("Economics", null, default);
+        var recording = Recording(Guid.NewGuid(), economics.Id, temp.File("Économie 101.mp4"));
+        await repository.AddRecordingAsync(recording, default);
+
+        var results = await repository.SearchClassRecordingsAsync(economics.Id, "éCONOMIE", default);
+
+        Assert.Equal(recording.Id, Assert.Single(results).Id);
     }
 
     [Fact]
