@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <thread>
 #include <string_view>
 
@@ -86,10 +87,16 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void set_host(HWND host) { host_ = host; }
 
   void onAuthenticationReturn(AuthResult result) override {
-    if (result != AUTHRET_SUCCESS) { sink_(R"({"type":"failed","component":"zoom_authentication"})"); return; }
+    if (result != AUTHRET_SUCCESS) {
+      emit_sdk_failure("Zoom SDK authentication failed", static_cast<int>(result));
+      return;
+    }
     authenticated_ = true;
     sink_(R"({"type":"zoom_authenticated"})");
-    if (enter_requested_) join();
+    if (enter_requested_) {
+      const auto join_result = join();
+      if (join_result != SDKERR_SUCCESS) emit_sdk_failure("Zoom Join failed", static_cast<int>(join_result));
+    }
   }
   void onLoginReturnWithReason(LOGINSTATUS, IAccountInfo*, LoginFailReason) override {}
   void onLogout() override {}
@@ -105,7 +112,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
       case MEETING_STATUS_ENDED:
         if (!ended_) { ended_ = true; sink_(R"({"type":"meeting_ended"})"); }
         break;
-      case MEETING_STATUS_FAILED: sink_(R"({"type":"failed","component":"zoom_meeting"})"); break;
+      case MEETING_STATUS_FAILED: emit_sdk_failure("Zoom meeting failed", result); break;
       default: break;
     }
   }
@@ -119,6 +126,13 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
   void onAppSignalPanelUpdated(IMeetingAppSignalHandler*) override {}
 
  private:
+  void emit_sdk_failure(const char* operation, int result) {
+    char event[192]{};
+    std::snprintf(event, sizeof(event),
+      "{\"type\":\"failed\",\"component\":\"zoom_meeting\",\"message\":\"%s (SDK error %d)\"}",
+      operation, result);
+    sink_(event);
+  }
   bool publish_meeting_window() {
     if (!meeting_) return false;
     auto* ui = meeting_->GetUIController(); if (!ui) return false;
@@ -153,7 +167,7 @@ class ZoomMeetingClientImpl final : public IAuthServiceEvent, public IMeetingSer
     guest.isVideoOff = false;
     guest.isAudioOff = false;
     join_called_ = true;
-    return meeting_->Join(parameters) == SDKERR_SUCCESS ? 0 : 3;
+    return static_cast<int>(meeting_->Join(parameters));
   }
 
   ZoomMeetingClient::EventSink sink_;
