@@ -14,9 +14,9 @@ bool run_mp4_writer_tests() {
   DeleteFileW((final_path + L".partial").c_str());
   DeleteFileW((final_path + L".partial.mp4").c_str());
   Mp4Writer writer;
-  const auto opened = writer.open(final_path, 640, 360, 30);
   auto* device = writer.device();
   const auto device_created = device != nullptr;
+  const auto opened = device_created && writer.open(final_path, 640, 360, 30);
   D3D11_TEXTURE2D_DESC description{};
   description.Width = 640; description.Height = 360; description.MipLevels = 1; description.ArraySize = 1;
   description.Format = DXGI_FORMAT_B8G8R8A8_UNORM; description.SampleDesc.Count = 1;

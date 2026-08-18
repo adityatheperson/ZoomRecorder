@@ -20,11 +20,7 @@ class Mp4WriterImpl {
     final_path_ = final_path; partial_path_ = final_path + L".partial.mp4"; frame_duration_ = 10'000'000LL / frame_rate;
     if (FAILED(MFStartup(MF_VERSION))) return false;
     mf_started_ = true;
-    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT, nullptr, 0,
-        D3D11_SDK_VERSION, &device_, nullptr, nullptr))) return false;
-    if (FAILED(MFCreateDXGIDeviceManager(&device_reset_token_, &device_manager_)) ||
-        FAILED(device_manager_->ResetDevice(device_.Get(), device_reset_token_))) return false;
+    if (!ensure_device()) return false;
     ComPtr<IMFAttributes> attributes; MFCreateAttributes(&attributes, 2);
     attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
     attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
@@ -99,10 +95,18 @@ class Mp4WriterImpl {
   }
   bool is_open() const { return writer_ != nullptr && !finalized_; }
   long last_error() const { return last_error_; }
-  ID3D11Device* device() const { return device_.Get(); }
+  ID3D11Device* device() { return ensure_device() ? device_.Get() : nullptr; }
   const std::wstring& final_path() const { return final_path_; }
 
  private:
+  bool ensure_device() {
+    if (!device_ && FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT, nullptr, 0,
+        D3D11_SDK_VERSION, &device_, nullptr, nullptr))) return false;
+    if (!mf_started_ || device_manager_) return true;
+    return SUCCEEDED(MFCreateDXGIDeviceManager(&device_reset_token_, &device_manager_)) &&
+      SUCCEEDED(device_manager_->ResetDevice(device_.Get(), device_reset_token_));
+  }
   std::int64_t normalize(std::int64_t value, std::int64_t& first) { if (first < 0) first = value; return std::max<std::int64_t>(0, value - first); }
   void shutdown() { if (mf_started_) { MFShutdown(); mf_started_ = false; } }
   ComPtr<IMFSinkWriter> writer_; ComPtr<ID3D11Device> device_; ComPtr<IMFDXGIDeviceManager> device_manager_;

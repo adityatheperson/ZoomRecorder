@@ -62,18 +62,23 @@ class RecordingPipelineImpl {
   bool attach_video(HWND meeting_window) {
     std::scoped_lock attach_lock(video_attach_mutex_);
     if (video_ || !IsWindow(meeting_window)) return video_ != nullptr;
-    RECT bounds{};
-    if (!GetWindowRect(meeting_window, &bounds)) return fail("Zoom meeting window dimensions are unavailable");
-    auto width = static_cast<unsigned>(bounds.right - bounds.left) & ~1u;
-    auto height = static_cast<unsigned>(bounds.bottom - bounds.top) & ~1u;
-    if (!width || !height) return fail("Zoom meeting window has no capturable area");
+    ID3D11Device* capture_device{};
     {
       std::scoped_lock writer_lock(writer_mutex_);
-      if (!writer_.open(output_, width, height)) return fail("MP4 encoder could not start for the Zoom meeting window");
+      capture_device = writer_.device();
+      if (!capture_device) return fail("Capture graphics device could not start");
     }
-    video_ = std::make_unique<MeetingRegionSource>(meeting_window, writer_.device(),
+    video_ = std::make_unique<MeetingRegionSource>(meeting_window, capture_device,
       [this](ID3D11Texture2D* texture, std::int64_t time) {
         std::scoped_lock lock(writer_mutex_);
+        if (!writer_.is_open()) {
+          D3D11_TEXTURE2D_DESC description{};
+          texture->GetDesc(&description);
+          if (!writer_.open(output_, description.Width, description.Height)) {
+            fail("MP4 encoder could not start for the captured Zoom frame");
+            return;
+          }
+        }
         if (!writer_.write_video(texture, time)) fail_encoder("Video encoder stopped");
       },
       [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); },

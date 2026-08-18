@@ -71,6 +71,12 @@ class MeetingRegionSourceImpl {
               health_(false, "Meeting area is outside the capturable app window");
               return;
             }
+            crop.width &= ~1u;
+            crop.height &= ~1u;
+            if (!crop.width || !crop.height) {
+              health_(false, "Zoom meeting frame has invalid encoder dimensions");
+              return;
+            }
             if (!cropped_ || crop.width != crop_width_ || crop.height != crop_height_) {
               D3D11_TEXTURE2D_DESC cropped_description = source_description;
               cropped_description.Width = crop.width;
