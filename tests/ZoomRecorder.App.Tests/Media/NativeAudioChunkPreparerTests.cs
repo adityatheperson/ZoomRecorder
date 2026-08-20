@@ -131,6 +131,30 @@ public sealed class NativeAudioChunkPreparerTests
             files.Mp4Path, files.JobDirectory, 100_000, CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData(6_000, 10_000, 5_000, 15_000)]
+    [InlineData(0, 10_000, 5_000, 9_000)]
+    public async Task Rejects_backward_time_ranges_even_when_adjacent_chunks_overlap_by_five_seconds(
+        long firstStart, long firstEnd, long secondStart, long secondEnd)
+    {
+        using var files = new TestFiles();
+        var first = files.CreateChunk("first.m4a", [1]);
+        var second = files.CreateChunk("second.m4a", [2]);
+        var native = new FakeNativeAudioChunkApi
+        {
+            Behavior = call =>
+            {
+                Emit(call, Metadata(0, first, firstStart, firstEnd));
+                Emit(call, Metadata(1, second, secondStart, secondEnd));
+                return ZrResult.Ok;
+            }
+        };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => new NativeAudioChunkPreparer(native).PrepareAsync(
+            files.Mp4Path, files.JobDirectory, 100_000, CancellationToken.None));
+        Assert.Equal(1, native.DestroyCalls);
+    }
+
     [Fact]
     public async Task Destroy_cleans_only_the_native_invocations_partial_contract()
     {

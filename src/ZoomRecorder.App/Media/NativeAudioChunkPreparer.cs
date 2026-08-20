@@ -196,6 +196,12 @@ internal sealed class NativeAudioChunkPreparer : IAudioChunkPreparer
             {
                 throw InvalidMetadata("a chunk has an invalid absolute time range");
             }
+            if (expectedIndex > 0 &&
+                (chunk.StartMilliseconds <= metadata[expectedIndex - 1].StartMilliseconds ||
+                 chunk.EndMilliseconds <= metadata[expectedIndex - 1].EndMilliseconds))
+            {
+                throw InvalidMetadata("chunk start and end times are not strictly increasing");
+            }
             if (expectedIndex > 0 && metadata[expectedIndex - 1].EndMilliseconds - chunk.StartMilliseconds != OverlapMilliseconds)
             {
                 throw InvalidMetadata("adjacent chunks do not overlap by exactly five seconds");

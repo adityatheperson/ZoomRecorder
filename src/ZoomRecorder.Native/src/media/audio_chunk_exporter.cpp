@@ -7,6 +7,7 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <wrl/client.h>
+#include <wrl/implements.h>
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <span>
 #include <utility>
@@ -45,7 +47,7 @@ class mf_session {
 };
 
 struct decoded_audio {
-  std::vector<std::int16_t> samples;
+  std::uint64_t frame_count{};
   std::int64_t first_milliseconds{};
   std::uint32_t sample_rate{};
   std::uint32_t channels{};
@@ -76,8 +78,63 @@ bool set_aac_type(IMFMediaType* type, std::uint32_t bitrate) {
     SUCCEEDED(type->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29));
 }
 
+class observed_byte_stream final : public Microsoft::WRL::RuntimeClass<
+    Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IMFByteStream> {
+ public:
+  explicit observed_byte_stream(IMFByteStream* inner) : inner_(inner) {}
+
+  IFACEMETHODIMP GetCapabilities(DWORD* capabilities) override { return inner_->GetCapabilities(capabilities); }
+  IFACEMETHODIMP GetLength(QWORD* length) override { return inner_->GetLength(length); }
+  IFACEMETHODIMP SetLength(QWORD length) override { return inner_->SetLength(length); }
+  IFACEMETHODIMP GetCurrentPosition(QWORD* position) override { return inner_->GetCurrentPosition(position); }
+  IFACEMETHODIMP SetCurrentPosition(QWORD position) override { return inner_->SetCurrentPosition(position); }
+  IFACEMETHODIMP IsEndOfStream(BOOL* end_of_stream) override { return inner_->IsEndOfStream(end_of_stream); }
+  IFACEMETHODIMP Read(BYTE* bytes, ULONG count, ULONG* read) override { return inner_->Read(bytes, count, read); }
+  IFACEMETHODIMP BeginRead(BYTE* bytes, ULONG count, IMFAsyncCallback* callback, IUnknown* state) override {
+    return inner_->BeginRead(bytes, count, callback, state);
+  }
+  IFACEMETHODIMP EndRead(IMFAsyncResult* result, ULONG* read) override { return inner_->EndRead(result, read); }
+  IFACEMETHODIMP Write(const BYTE* bytes, ULONG count, ULONG* written) override {
+    return inner_->Write(bytes, count, written);
+  }
+  IFACEMETHODIMP BeginWrite(const BYTE* bytes, ULONG count, IMFAsyncCallback* callback, IUnknown* state) override {
+    return inner_->BeginWrite(bytes, count, callback, state);
+  }
+  IFACEMETHODIMP EndWrite(IMFAsyncResult* result, ULONG* written) override { return inner_->EndWrite(result, written); }
+  IFACEMETHODIMP Seek(MFBYTESTREAM_SEEK_ORIGIN origin, LONGLONG offset, DWORD flags, QWORD* position) override {
+    return inner_->Seek(origin, offset, flags, position);
+  }
+  IFACEMETHODIMP Flush() override { return inner_->Flush(); }
+  IFACEMETHODIMP Close() override {
+    const auto result = inner_->Close();
+    std::scoped_lock lock(mutex_);
+    if (!close_called_) {
+      close_called_ = true;
+      close_result_ = result;
+    }
+    return result;
+  }
+
+  HRESULT ensure_closed() {
+    // The MPEG-4 sink closes its archive stream during Finalize. Preserve that
+    // first Close HRESULT instead of issuing a second Close that returns E_INVALIDARG.
+    {
+      std::scoped_lock lock(mutex_);
+      if (close_called_) return close_result_;
+    }
+    return Close();
+  }
+
+ private:
+  ComPtr<IMFByteStream> inner_;
+  std::mutex mutex_;
+  bool close_called_{};
+  HRESULT close_result_{E_PENDING};
+};
+
 audio_chunk_export_result decode_audio(
     const fs::path& input,
+    const fs::path& spool_path,
     const audio_chunk_cancellation& cancellation,
     decoded_audio& output) {
   ComPtr<IMFAttributes> attributes;
@@ -102,6 +159,8 @@ audio_chunk_export_result decode_audio(
       output.sample_rate != normalized_sample_rate || output.channels != channel_count)
     return audio_chunk_export_result::media_failure;
 
+  std::ofstream spool(spool_path, std::ios::binary | std::ios::trunc);
+  if (!spool) return audio_chunk_export_result::io_failure;
   bool timestamp_set{};
   while (true) {
     if (cancellation.is_cancelled()) return audio_chunk_export_result::cancelled;
@@ -122,33 +181,43 @@ audio_chunk_export_result decode_audio(
       DWORD maximum{}, length{};
       if (FAILED(buffer->Lock(&bytes, &maximum, &length))) return audio_chunk_export_result::media_failure;
       const auto valid = length % sizeof(std::int16_t) == 0;
-      if (valid && length > 0) {
-        const auto old_size = output.samples.size();
-        output.samples.resize(old_size + length / sizeof(std::int16_t));
-        std::memcpy(output.samples.data() + old_size, bytes, length);
-      }
-      buffer->Unlock();
-      if (!valid) return audio_chunk_export_result::media_failure;
+      const auto frames = static_cast<std::uint64_t>(length / sizeof(std::int16_t));
+      const auto count_valid = frames <= (std::numeric_limits<std::uint64_t>::max)() - output.frame_count;
+      if (valid && count_valid && length > 0)
+        spool.write(reinterpret_cast<const char*>(bytes), static_cast<std::streamsize>(length));
+      const auto unlocked = buffer->Unlock();
+      if (!valid || !count_valid || FAILED(unlocked)) return audio_chunk_export_result::media_failure;
+      if (!spool) return audio_chunk_export_result::io_failure;
+      output.frame_count += frames;
     }
     if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
   }
-  return output.samples.empty() ? audio_chunk_export_result::missing_audio : audio_chunk_export_result::success;
+  spool.close();
+  if (!spool) return audio_chunk_export_result::io_failure;
+  return output.frame_count == 0 ? audio_chunk_export_result::missing_audio : audio_chunk_export_result::success;
 }
 
 struct sink_resources {
-  ComPtr<IMFByteStream> stream;
+  ComPtr<observed_byte_stream> stream;
   ComPtr<IMFMediaSink> sink;
   ComPtr<IMFSinkWriter> writer;
 
-  ~sink_resources() { close(false); }
+  ~sink_resources() { (void)close(false, nullptr); }
 
-  void close(bool finalize) {
-    if (writer && finalize) writer->Finalize();
+  audio_chunk_export_result close(bool finalize, const audio_chunk_export_test_seam* test_seam) {
+    const auto finalized = writer && finalize ? writer->Finalize() : (finalize ? E_UNEXPECTED : S_OK);
     writer.Reset();
-    if (sink) sink->Shutdown();
+    const auto shutdown = sink ? sink->Shutdown() : (finalize ? E_UNEXPECTED : S_OK);
     sink.Reset();
-    if (stream) stream->Close();
+    const auto closed = stream ? stream->ensure_closed() : (finalize ? E_UNEXPECTED : S_OK);
     stream.Reset();
+    auto close_succeeded = SUCCEEDED(closed);
+    if (test_seam && test_seam->accept_byte_stream_close) {
+      try { close_succeeded = close_succeeded && test_seam->accept_byte_stream_close(close_succeeded); }
+      catch (...) { close_succeeded = false; }
+    }
+    if (FAILED(finalized) || FAILED(shutdown)) return audio_chunk_export_result::media_failure;
+    return close_succeeded ? audio_chunk_export_result::success : audio_chunk_export_result::io_failure;
   }
 };
 
@@ -163,32 +232,35 @@ class partial_file_guard {
   bool active_{true};
 };
 
+void observe_buffered_bytes(const audio_chunk_export_test_seam* test_seam, std::uint64_t bytes) {
+  if (test_seam && test_seam->peak_buffered_bytes && *test_seam->peak_buffered_bytes < bytes)
+    *test_seam->peak_buffered_bytes = bytes;
+}
+
 audio_chunk_export_result encode_candidate(
     std::span<const std::int16_t> samples,
+    std::uint64_t owned_candidate_bytes,
     const fs::path& partial_path,
     std::uint32_t bitrate,
-    const audio_chunk_cancellation& cancellation) {
-  if (samples.size() > (std::numeric_limits<size_t>::max)() / 3) return audio_chunk_export_result::media_failure;
-  std::vector<std::int16_t> encoder_samples(samples.size() * 3);
-  for (size_t index = 0; index < samples.size(); ++index) {
-    const auto first = static_cast<std::int32_t>(samples[index]);
-    const auto second = static_cast<std::int32_t>(samples[(std::min)(index + 1, samples.size() - 1)]);
-    encoder_samples[index * 3] = static_cast<std::int16_t>(first);
-    encoder_samples[index * 3 + 1] = static_cast<std::int16_t>((first * 2 + second) / 3);
-    encoder_samples[index * 3 + 2] = static_cast<std::int16_t>((first + second * 2) / 3);
-  }
+    const audio_chunk_cancellation& cancellation,
+    const audio_chunk_export_test_seam* test_seam) {
+  if (samples.empty()) return audio_chunk_export_result::media_failure;
+  observe_buffered_bytes(test_seam, owned_candidate_bytes);
   sink_resources resources;
-  auto stage_result = MFCreateFile(MF_ACCESSMODE_WRITE, MF_OPENMODE_DELETE_IF_EXIST, MF_FILEFLAGS_NONE,
-    partial_path.c_str(), &resources.stream);
+  ComPtr<IMFByteStream> file_stream;
+  auto stage_result = MFCreateFile(MF_ACCESSMODE_READWRITE, MF_OPENMODE_DELETE_IF_EXIST, MF_FILEFLAGS_NONE,
+    partial_path.c_str(), &file_stream);
   if (FAILED(stage_result)) return audio_chunk_export_result::io_failure;
+  resources.stream = Microsoft::WRL::Make<observed_byte_stream>(file_stream.Get());
+  if (!resources.stream) return audio_chunk_export_result::media_failure;
   ComPtr<IMFMediaType> output_type;
   stage_result = MFCreateMediaType(&output_type);
   if (FAILED(stage_result) || !set_aac_type(output_type.Get(), bitrate)) {
-    resources.close(false); return audio_chunk_export_result::media_failure;
+    resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
   }
   stage_result = MFCreateMPEG4MediaSink(resources.stream.Get(), nullptr, output_type.Get(), &resources.sink);
   if (FAILED(stage_result)) {
-    resources.close(false); return audio_chunk_export_result::media_failure;
+    resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
   }
   ComPtr<IMFAttributes> writer_attributes;
   stage_result = MFCreateAttributes(&writer_attributes, 1);
@@ -197,50 +269,59 @@ audio_chunk_export_result encode_candidate(
   if (SUCCEEDED(stage_result))
     stage_result = MFCreateSinkWriterFromMediaSink(resources.sink.Get(), writer_attributes.Get(), &resources.writer);
   if (FAILED(stage_result)) {
-    resources.close(false); return audio_chunk_export_result::media_failure;
+    resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
   }
   ComPtr<IMFMediaType> input_type;
   stage_result = MFCreateMediaType(&input_type);
   if (FAILED(stage_result) || !set_pcm_type(input_type.Get(), encoded_sample_rate)) {
-    resources.close(false); return audio_chunk_export_result::media_failure;
+    resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
   }
   stage_result = resources.writer->SetInputMediaType(0, input_type.Get(), nullptr);
   if (FAILED(stage_result)) {
-    resources.close(false); return audio_chunk_export_result::media_failure;
+    resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
   }
   stage_result = resources.writer->BeginWriting();
   if (FAILED(stage_result)) {
-    resources.close(false); return audio_chunk_export_result::media_failure;
+    resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
   }
 
-  constexpr std::size_t frames_per_sample = encoded_sample_rate;
-  for (std::size_t offset = 0; offset < encoder_samples.size(); offset += frames_per_sample) {
+  constexpr std::size_t normalized_frames_per_sample = normalized_sample_rate;
+  for (std::size_t source_offset = 0; source_offset < samples.size(); source_offset += normalized_frames_per_sample) {
     if (cancellation.is_cancelled()) {
-      resources.close(true); return audio_chunk_export_result::cancelled;
+      resources.close(false, nullptr); return audio_chunk_export_result::cancelled;
     }
-    const auto frame_count = (std::min)(frames_per_sample, encoder_samples.size() - offset);
-    const auto byte_count = static_cast<DWORD>(frame_count * sizeof(std::int16_t));
+    const auto source_frame_count = (std::min)(normalized_frames_per_sample, samples.size() - source_offset);
+    const auto encoder_frame_count = source_frame_count * 3;
+    const auto byte_count = static_cast<DWORD>(encoder_frame_count * sizeof(std::int16_t));
+    observe_buffered_bytes(test_seam, owned_candidate_bytes + byte_count);
     ComPtr<IMFMediaBuffer> buffer;
     BYTE* target{};
     if (FAILED(MFCreateMemoryBuffer(byte_count, &buffer)) || FAILED(buffer->Lock(&target, nullptr, nullptr))) {
-      resources.close(true); return audio_chunk_export_result::media_failure;
+      resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
     }
-    std::memcpy(target, encoder_samples.data() + offset, byte_count);
-    buffer->Unlock();
-    if (FAILED(buffer->SetCurrentLength(byte_count))) {
-      resources.close(true); return audio_chunk_export_result::media_failure;
+    auto* encoder_samples = reinterpret_cast<std::int16_t*>(target);
+    for (std::size_t index = 0; index < source_frame_count; ++index) {
+      const auto absolute_index = source_offset + index;
+      const auto first = static_cast<std::int32_t>(samples[absolute_index]);
+      const auto second = static_cast<std::int32_t>(samples[(std::min)(absolute_index + 1, samples.size() - 1)]);
+      encoder_samples[index * 3] = static_cast<std::int16_t>(first);
+      encoder_samples[index * 3 + 1] = static_cast<std::int16_t>((first * 2 + second) / 3);
+      encoder_samples[index * 3 + 2] = static_cast<std::int16_t>((first + second * 2) / 3);
+    }
+    const auto unlocked = buffer->Unlock();
+    if (FAILED(unlocked) || FAILED(buffer->SetCurrentLength(byte_count))) {
+      resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
     }
     ComPtr<IMFSample> sample;
+    const auto encoder_offset = source_offset * 3;
     if (FAILED(MFCreateSample(&sample)) || FAILED(sample->AddBuffer(buffer.Get())) ||
-        FAILED(sample->SetSampleTime(static_cast<LONGLONG>(offset) * 10000000LL / encoded_sample_rate)) ||
-        FAILED(sample->SetSampleDuration(static_cast<LONGLONG>(frame_count) * 10000000LL / encoded_sample_rate)) ||
+        FAILED(sample->SetSampleTime(static_cast<LONGLONG>(encoder_offset) * 10000000LL / encoded_sample_rate)) ||
+        FAILED(sample->SetSampleDuration(static_cast<LONGLONG>(encoder_frame_count) * 10000000LL / encoded_sample_rate)) ||
         FAILED(resources.writer->WriteSample(0, sample.Get()))) {
-      resources.close(true); return audio_chunk_export_result::media_failure;
+      resources.close(false, nullptr); return audio_chunk_export_result::media_failure;
     }
   }
-  const auto finalized = resources.writer->Finalize();
-  resources.close(false);
-  return SUCCEEDED(finalized) ? audio_chunk_export_result::success : audio_chunk_export_result::media_failure;
+  return resources.close(true, test_seam);
 }
 
 std::string sha256_file(const fs::path& path) {
@@ -289,20 +370,58 @@ std::wstring chunk_suffix(std::uint32_t index) {
   return value.str();
 }
 
-std::uint64_t initial_candidate_frames(std::uint64_t max_bytes, std::uint64_t remaining_frames) {
+std::uint64_t initial_candidate_frames(
+    std::uint64_t max_bytes,
+    std::uint64_t remaining_frames,
+    std::uint64_t maximum_frames) {
   const auto allowance = max_bytes > 4096 ? max_bytes - 4096 : max_bytes / 2;
   const auto estimated = allowance > (std::numeric_limits<std::uint64_t>::max)() / (8ull * normalized_sample_rate)
     ? remaining_frames : allowance * 8ull * normalized_sample_rate / aac_bitrate;
   const auto aligned = estimated / millisecond_frames * millisecond_frames;
-  return (std::min)(remaining_frames, (std::max<std::uint64_t>)(aligned, millisecond_frames));
+  return (std::min)({remaining_frames, maximum_frames, (std::max<std::uint64_t>)(aligned, millisecond_frames)});
+}
+
+std::uint64_t maximum_candidate_frames(const audio_chunk_export_test_seam* test_seam) {
+  auto memory_limit = audio_chunk_exporter::maximum_buffered_bytes;
+  if (test_seam && test_seam->maximum_buffered_bytes != 0)
+    memory_limit = (std::min)(memory_limit, test_seam->maximum_buffered_bytes);
+  constexpr auto maximum_encoder_buffer_bytes =
+    static_cast<std::uint64_t>(encoded_sample_rate) * sizeof(std::int16_t);
+  if (memory_limit <= maximum_encoder_buffer_bytes) return 0;
+  return ((memory_limit - maximum_encoder_buffer_bytes) / bytes_per_frame) /
+    millisecond_frames * millisecond_frames;
+}
+
+audio_chunk_export_result read_candidate(
+    const fs::path& spool_path,
+    std::uint64_t start_frame,
+    std::uint64_t frame_count,
+    std::vector<std::int16_t>& samples) {
+  if (frame_count == 0 || frame_count > (std::numeric_limits<std::size_t>::max)() ||
+      start_frame > static_cast<std::uint64_t>((std::numeric_limits<std::streamoff>::max)()) / bytes_per_frame)
+    return audio_chunk_export_result::media_failure;
+  const auto byte_count = frame_count * bytes_per_frame;
+  if (byte_count > static_cast<std::uint64_t>((std::numeric_limits<std::streamsize>::max)()))
+    return audio_chunk_export_result::media_failure;
+  samples.resize(static_cast<std::size_t>(frame_count));
+  std::ifstream spool(spool_path, std::ios::binary);
+  if (!spool) return audio_chunk_export_result::io_failure;
+  spool.seekg(static_cast<std::streamoff>(start_frame * bytes_per_frame));
+  if (!spool) return audio_chunk_export_result::io_failure;
+  spool.read(reinterpret_cast<char*>(samples.data()), static_cast<std::streamsize>(byte_count));
+  return static_cast<std::uint64_t>(spool.gcount()) == byte_count
+    ? audio_chunk_export_result::success
+    : audio_chunk_export_result::io_failure;
 }
 }
 
 void audio_chunk_cancellation::cancel() noexcept { cancelled_.store(true, std::memory_order_release); }
 bool audio_chunk_cancellation::is_cancelled() const noexcept { return cancelled_.load(std::memory_order_acquire); }
 
-audio_chunk_exporter::audio_chunk_exporter(audio_chunk_cancellation& cancellation) noexcept
-    : cancellation_(cancellation) {}
+audio_chunk_exporter::audio_chunk_exporter(
+    audio_chunk_cancellation& cancellation,
+    const audio_chunk_export_test_seam* test_seam) noexcept
+    : cancellation_(cancellation), test_seam_(test_seam) {}
 
 audio_chunk_export_result audio_chunk_exporter::export_chunks(
     const fs::path& mp4_path,
@@ -323,17 +442,29 @@ audio_chunk_export_result audio_chunk_exporter::export_chunks(
   if (cancellation_.is_cancelled()) return audio_chunk_export_result::cancelled;
   mf_session media_foundation;
   if (!media_foundation.started()) return audio_chunk_export_result::media_failure;
+  const auto prefix = make_invocation_prefix();
+  const auto spool_path = canonical_output / (prefix + L"-normalized.pcm.partial");
+  if (fs::weakly_canonical(spool_path.parent_path()) != canonical_output)
+    return audio_chunk_export_result::invalid_argument;
+  std::error_code ignored;
+  fs::remove(spool_path, ignored);
+  partial_file_guard spool_guard(spool_path);
   decoded_audio audio;
-  const auto decoded = decode_audio(canonical_input, cancellation_, audio);
+  const auto decoded = decode_audio(canonical_input, spool_path, cancellation_, audio);
   if (decoded != audio_chunk_export_result::success) return decoded;
 
-  const auto prefix = make_invocation_prefix();
+  const auto candidate_limit = maximum_candidate_frames(test_seam_);
+  if (candidate_limit < millisecond_frames) return audio_chunk_export_result::invalid_argument;
   std::uint64_t start_frame{};
   std::uint32_t index{};
-  while (start_frame < audio.samples.size()) {
+  while (start_frame < audio.frame_count) {
     if (cancellation_.is_cancelled()) return audio_chunk_export_result::cancelled;
-    const auto remaining = audio.samples.size() - start_frame;
-    auto candidate_frames = initial_candidate_frames(max_chunk_bytes, remaining);
+    const auto remaining = audio.frame_count - start_frame;
+    auto candidate_frames = initial_candidate_frames(max_chunk_bytes, remaining, candidate_limit);
+    std::vector<std::int16_t> candidate_samples;
+    const auto read = read_candidate(spool_path, start_frame, candidate_frames, candidate_samples);
+    if (read != audio_chunk_export_result::success) return read;
+    const auto owned_candidate_bytes = static_cast<std::uint64_t>(candidate_samples.size()) * bytes_per_frame;
     bool published{};
     while (!published) {
       if (cancellation_.is_cancelled()) return audio_chunk_export_result::cancelled;
@@ -345,12 +476,11 @@ audio_chunk_export_result audio_chunk_exporter::export_chunks(
       if (fs::weakly_canonical(partial_path.parent_path()) != canonical_output ||
           fs::weakly_canonical(final_path.parent_path()) != canonical_output)
         return audio_chunk_export_result::invalid_argument;
-      std::error_code ignored;
       fs::remove(partial_path, ignored);
       partial_file_guard partial_guard(partial_path);
       const auto encoded = encode_candidate(
-        std::span(audio.samples).subspan(static_cast<size_t>(start_frame), static_cast<size_t>(candidate_frames)),
-        partial_path, aac_bitrate, cancellation_);
+        std::span(candidate_samples).first(static_cast<size_t>(candidate_frames)), owned_candidate_bytes,
+        partial_path, aac_bitrate, cancellation_, test_seam_);
       if (encoded != audio_chunk_export_result::success) {
         fs::remove(partial_path, ignored);
         return encoded;
@@ -390,7 +520,7 @@ audio_chunk_export_result audio_chunk_exporter::export_chunks(
       on_chunk(record);
       published = true;
       ++index;
-      if (end_frame >= audio.samples.size()) start_frame = audio.samples.size();
+      if (end_frame >= audio.frame_count) start_frame = audio.frame_count;
       else start_frame = end_frame - overlap_frames;
     }
   }

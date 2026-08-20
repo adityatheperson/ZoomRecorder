@@ -36,12 +36,21 @@ class audio_chunk_cancellation {
   std::atomic_bool cancelled_{};
 };
 
+struct audio_chunk_export_test_seam {
+  std::function<bool(bool actual_result)> accept_byte_stream_close;
+  std::uint64_t maximum_buffered_bytes{};
+  std::uint64_t* peak_buffered_bytes{};
+};
+
 class audio_chunk_exporter {
  public:
   using callback = std::function<void(const audio_chunk_export_record&)>;
   static constexpr std::uint64_t default_max_chunk_bytes = 24ull * 1024ull * 1024ull;
+  static constexpr std::uint64_t maximum_buffered_bytes = 32ull * 1024ull * 1024ull;
 
-  explicit audio_chunk_exporter(audio_chunk_cancellation& cancellation) noexcept;
+  explicit audio_chunk_exporter(
+      audio_chunk_cancellation& cancellation,
+      const audio_chunk_export_test_seam* test_seam = nullptr) noexcept;
   audio_chunk_export_result export_chunks(
       const std::filesystem::path& mp4_path,
       const std::filesystem::path& output_directory,
@@ -50,4 +59,5 @@ class audio_chunk_exporter {
 
  private:
   audio_chunk_cancellation& cancellation_;
+  const audio_chunk_export_test_seam* test_seam_;
 };

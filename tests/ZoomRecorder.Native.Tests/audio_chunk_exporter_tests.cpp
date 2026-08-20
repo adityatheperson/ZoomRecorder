@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -122,6 +123,12 @@ bool no_partial_files(const fs::path& directory) {
   });
 }
 
+bool no_published_chunks(const fs::path& directory) {
+  return std::ranges::none_of(fs::directory_iterator(directory), [](const auto& entry) {
+    return entry.path().extension() == L".m4a";
+  });
+}
+
 bool validate_chunks(const std::vector<audio_chunk_export_record>& chunks, const fs::path& output, std::uint64_t max_bytes) {
   if (!expect(!chunks.empty(), "at least one chunk is published")) return false;
   for (size_t index = 0; index < chunks.size(); ++index) {
@@ -149,6 +156,8 @@ struct abi_callback_state {
   zr_audio_prepare_handle* handle{};
   std::vector<audio_chunk_export_record> chunks;
   bool cancel_after_first{};
+  std::atomic_bool* block_entered{};
+  std::atomic_bool* block_release{};
 };
 
 void __stdcall collect_abi_chunk(const zr_audio_chunk* chunk, void* context) {
@@ -158,18 +167,30 @@ void __stdcall collect_abi_chunk(const zr_audio_chunk* chunk, void* context) {
     chunk->end_milliseconds, chunk->sha256 ? chunk->sha256 : "", chunk->byte_size,
     chunk->normalized_sample_rate, chunk->encoded_sample_rate, chunk->channel_count});
   if (state.cancel_after_first && state.handle && *state.handle) zr_cancel_audio_preparation(*state.handle);
+  if (state.block_entered && state.block_release) {
+    state.block_entered->store(true, std::memory_order_release);
+    while (!state.block_release->load(std::memory_order_acquire)) Sleep(1);
+  }
+}
+
+bool wait_until_true(const std::atomic_bool& value, DWORD timeout_milliseconds) {
+  const auto deadline = GetTickCount64() + timeout_milliseconds;
+  while (!value.load(std::memory_order_acquire) && GetTickCount64() < deadline) Sleep(1);
+  return value.load(std::memory_order_acquire);
 }
 }
 
 bool run_audio_chunk_exporter_tests() {
   temporary_directory temporary;
   const auto fixture = temporary.path / L"lecture.mp4";
+  const auto long_fixture = temporary.path / L"long-lecture.mp4";
   const auto silent_fixture = temporary.path / L"silent.mp4";
   const auto corrupt_fixture = temporary.path / L"corrupt.mp4";
   const auto output = temporary.path / L"job";
   const auto cancel_output = temporary.path / L"cancel-job";
   fs::create_directories(output); fs::create_directories(cancel_output);
   if (!expect(create_fixture(fixture, 11, true), "synthetic audio fixture is created") ||
+      !expect(create_fixture(long_fixture, 45, true), "synthetic long audio fixture is created") ||
       !expect(create_fixture(silent_fixture, 1, false), "synthetic missing-audio fixture is created")) return false;
   { std::ofstream corrupt(corrupt_fixture, std::ios::binary); corrupt << "not an mp4"; }
 
@@ -191,6 +212,41 @@ bool run_audio_chunk_exporter_tests() {
   if (!expect(result == audio_chunk_export_result::success, "forced multi-chunk export succeeds") ||
       !expect(multiple.size() > 1, "small bound forces multiple chunks") ||
       !validate_chunks(multiple, output, forced_max) || !expect(no_partial_files(output), "successful export leaves no partials")) return false;
+
+  const auto close_failure_output = temporary.path / L"close-failure";
+  fs::create_directories(close_failure_output);
+  audio_chunk_export_test_seam close_failure_seam;
+  close_failure_seam.accept_byte_stream_close = [](bool) { return false; };
+  audio_chunk_cancellation close_failure_cancel;
+  audio_chunk_exporter close_failure_exporter(close_failure_cancel, &close_failure_seam);
+  std::vector<audio_chunk_export_record> close_failure_chunks;
+  result = close_failure_exporter.export_chunks(fixture, close_failure_output,
+    audio_chunk_exporter::default_max_chunk_bytes,
+    [&](const auto& chunk) { close_failure_chunks.push_back(chunk); });
+  if (!expect(result == audio_chunk_export_result::io_failure, "byte-stream close failure is reported") ||
+      !expect(close_failure_chunks.empty() && no_published_chunks(close_failure_output),
+        "byte-stream close failure never publishes a chunk") ||
+      !expect(no_partial_files(close_failure_output), "byte-stream close failure removes its partial")) return false;
+
+  const auto bounded_output = temporary.path / L"bounded-memory";
+  fs::create_directories(bounded_output);
+  constexpr std::uint64_t test_memory_bound = 512 * 1024;
+  std::uint64_t peak_buffered_bytes{};
+  audio_chunk_export_test_seam bounded_memory_seam;
+  bounded_memory_seam.maximum_buffered_bytes = test_memory_bound;
+  bounded_memory_seam.peak_buffered_bytes = &peak_buffered_bytes;
+  audio_chunk_cancellation bounded_memory_cancel;
+  audio_chunk_exporter bounded_memory_exporter(bounded_memory_cancel, &bounded_memory_seam);
+  std::vector<audio_chunk_export_record> bounded_chunks;
+  result = bounded_memory_exporter.export_chunks(long_fixture, bounded_output,
+    audio_chunk_exporter::default_max_chunk_bytes,
+    [&](const auto& chunk) { bounded_chunks.push_back(chunk); });
+  if (!expect(result == audio_chunk_export_result::success, "long generated input exports with bounded buffering") ||
+      !expect(bounded_chunks.size() > 1, "the injected memory bound forces streaming across candidates") ||
+      !expect(peak_buffered_bytes > 0 && peak_buffered_bytes <= test_memory_bound,
+        "peak owned PCM buffering stays within the explicit bound") ||
+      !validate_chunks(bounded_chunks, bounded_output, audio_chunk_exporter::default_max_chunk_bytes) ||
+      !expect(no_partial_files(bounded_output), "bounded streaming removes its PCM and M4A partials")) return false;
 
   audio_chunk_cancellation cancelled;
   audio_chunk_exporter cancelling_exporter(cancelled);
@@ -260,6 +316,43 @@ bool run_audio_chunk_exporter_tests() {
     expect(zr_destroy_audio_preparation(handle) == ZR_OK, "cancelled ABI preparation handle is destroyed") &&
     expect(no_partial_files(cancel_output), "ABI cancellation leaves no partials") &&
     expect(sha256_file(fixture) == original_hash, "ABI also preserves source MP4")) return false;
+
+  const auto lifetime_output = temporary.path / L"handle-lifetime";
+  fs::create_directories(lifetime_output);
+  zr_audio_prepare_handle lifetime_handle{};
+  std::atomic_bool callback_entered{}, callback_release{}, begin_operations{};
+  abi_callback_state lifetime_state{&lifetime_handle, {}, false, &callback_entered, &callback_release};
+  zr_result lifetime_prepare_result{ZR_INTERNAL_ERROR};
+  std::thread prepare_thread([&] {
+    lifetime_prepare_result = zr_prepare_audio_chunks(fixture.c_str(), lifetime_output.c_str(), forced_max,
+      collect_abi_chunk, &lifetime_state, &lifetime_handle);
+  });
+  if (!wait_until_true(callback_entered, 10000)) {
+    callback_release.store(true, std::memory_order_release);
+    prepare_thread.join();
+    return expect(false, "ABI lifetime regression reaches a live callback");
+  }
+  zr_result cancel_race_result{ZR_INTERNAL_ERROR};
+  zr_result first_destroy_result{ZR_INTERNAL_ERROR};
+  zr_result second_destroy_result{ZR_INTERNAL_ERROR};
+  auto wait_for_start = [&] { while (!begin_operations.load(std::memory_order_acquire)) std::this_thread::yield(); };
+  std::thread cancel_race([&] { wait_for_start(); cancel_race_result = zr_cancel_audio_preparation(lifetime_handle); });
+  std::thread first_destroy([&] { wait_for_start(); first_destroy_result = zr_destroy_audio_preparation(lifetime_handle); });
+  std::thread second_destroy([&] { wait_for_start(); second_destroy_result = zr_destroy_audio_preparation(lifetime_handle); });
+  begin_operations.store(true, std::memory_order_release);
+  Sleep(20);
+  callback_release.store(true, std::memory_order_release);
+  cancel_race.join(); first_destroy.join(); second_destroy.join(); prepare_thread.join();
+  const auto successful_destroys = (first_destroy_result == ZR_OK ? 1 : 0) + (second_destroy_result == ZR_OK ? 1 : 0);
+  const auto rejected_destroys = (first_destroy_result == ZR_INVALID_ARGUMENT ? 1 : 0) +
+    (second_destroy_result == ZR_INVALID_ARGUMENT ? 1 : 0);
+  if (!expect(lifetime_prepare_result == ZR_CANCELLED, "destroy cancels a live ABI preparation") ||
+      !expect(successful_destroys == 1 && rejected_destroys == 1,
+        "exactly one concurrent destroy acquires the handle") ||
+      !expect(cancel_race_result == ZR_OK || cancel_race_result == ZR_INVALID_ARGUMENT,
+        "cancel deterministically succeeds before removal or is rejected after removal") ||
+      !expect(zr_cancel_audio_preparation(lifetime_handle) == ZR_INVALID_ARGUMENT,
+        "operations after destroy cannot access released preparation memory")) return false;
 
   const auto parallel_cancel_output = temporary.path / L"parallel-cancel";
   const auto parallel_success_output = temporary.path / L"parallel-success";

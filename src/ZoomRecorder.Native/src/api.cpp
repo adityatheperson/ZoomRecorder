@@ -4,8 +4,10 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <cstdint>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include "media/audio_chunk_exporter.h"
 #include "media/recording_pipeline.h"
 #ifdef ZR_WITH_ZOOM
@@ -34,6 +36,26 @@ struct audio_preparation {
   bool active{true};
   std::thread::id worker;
 };
+
+std::mutex audio_preparation_registry_mutex;
+std::unordered_map<zr_audio_prepare_handle, std::shared_ptr<audio_preparation>> audio_preparation_registry;
+std::uintptr_t next_audio_preparation_handle{1};
+
+zr_audio_prepare_handle register_audio_preparation(const std::shared_ptr<audio_preparation>& preparation) {
+  std::scoped_lock lock(audio_preparation_registry_mutex);
+  zr_audio_prepare_handle handle{};
+  do {
+    handle = reinterpret_cast<zr_audio_prepare_handle>(next_audio_preparation_handle++);
+  } while (!handle || audio_preparation_registry.contains(handle));
+  audio_preparation_registry.emplace(handle, preparation);
+  return handle;
+}
+
+std::shared_ptr<audio_preparation> acquire_audio_preparation(zr_audio_prepare_handle handle) {
+  std::scoped_lock lock(audio_preparation_registry_mutex);
+  const auto found = audio_preparation_registry.find(handle);
+  return found == audio_preparation_registry.end() ? nullptr : found->second;
+}
 
 void emit(session& value, const char* json) {
   if (value.callback) value.callback(json, value.context);
@@ -153,12 +175,12 @@ zr_result zr_prepare_audio_chunks(
   *out_handle = nullptr;
   if (!mp4_path || !*mp4_path || !output_directory || !*output_directory || max_chunk_bytes == 0 || !callback)
     return ZR_INVALID_ARGUMENT;
+  std::shared_ptr<audio_preparation> preparation;
   try {
-    auto preparation = std::make_unique<audio_preparation>();
+    preparation = std::make_shared<audio_preparation>();
     preparation->worker = std::this_thread::get_id();
-    auto* raw = preparation.release();
-    *out_handle = raw;
-    audio_chunk_exporter exporter(raw->cancellation);
+    *out_handle = register_audio_preparation(preparation);
+    audio_chunk_exporter exporter(preparation->cancellation);
     const auto result = exporter.export_chunks(mp4_path, output_directory, max_chunk_bytes,
       [callback, context](const audio_chunk_export_record& chunk) {
         const zr_audio_chunk value{
@@ -175,19 +197,18 @@ zr_result zr_prepare_audio_chunks(
         callback(&value, context);
       });
     {
-      std::scoped_lock lock(raw->mutex);
-      raw->active = false;
+      std::scoped_lock lock(preparation->mutex);
+      preparation->active = false;
     }
-    raw->finished.notify_all();
+    preparation->finished.notify_all();
     return map_audio_result(result);
   } catch (...) {
-    auto* raw = static_cast<audio_preparation*>(*out_handle);
-    if (raw) {
+    if (preparation) {
       {
-        std::scoped_lock lock(raw->mutex);
-        raw->active = false;
+        std::scoped_lock lock(preparation->mutex);
+        preparation->active = false;
       }
-      raw->finished.notify_all();
+      preparation->finished.notify_all();
     }
     return ZR_INTERNAL_ERROR;
   }
@@ -195,18 +216,26 @@ zr_result zr_prepare_audio_chunks(
 
 zr_result zr_cancel_audio_preparation(zr_audio_prepare_handle handle) {
   if (!handle) return ZR_INVALID_ARGUMENT;
-  static_cast<audio_preparation*>(handle)->cancellation.cancel();
+  const auto preparation = acquire_audio_preparation(handle);
+  if (!preparation) return ZR_INVALID_ARGUMENT;
+  preparation->cancellation.cancel();
   return ZR_OK;
 }
 
 zr_result zr_destroy_audio_preparation(zr_audio_prepare_handle handle) {
   if (!handle) return ZR_INVALID_ARGUMENT;
-  auto* preparation = static_cast<audio_preparation*>(handle);
+  std::shared_ptr<audio_preparation> preparation;
+  {
+    std::scoped_lock registry_lock(audio_preparation_registry_mutex);
+    const auto found = audio_preparation_registry.find(handle);
+    if (found == audio_preparation_registry.end()) return ZR_INVALID_ARGUMENT;
+    preparation = found->second;
+    std::scoped_lock preparation_lock(preparation->mutex);
+    if (preparation->active && preparation->worker == std::this_thread::get_id()) return ZR_INVALID_STATE;
+    audio_preparation_registry.erase(found);
+  }
   preparation->cancellation.cancel();
   std::unique_lock lock(preparation->mutex);
-  if (preparation->active && preparation->worker == std::this_thread::get_id()) return ZR_INVALID_STATE;
   preparation->finished.wait(lock, [preparation] { return !preparation->active; });
-  lock.unlock();
-  delete preparation;
   return ZR_OK;
 }
