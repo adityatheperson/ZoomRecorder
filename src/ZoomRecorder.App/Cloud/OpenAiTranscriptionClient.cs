@@ -34,7 +34,15 @@ internal sealed class OpenAiTranscriptionClient(OpenAiApiClient api) : ITranscri
         {
             throw;
         }
+        catch (OperationCanceledException)
+        {
+            throw OpenAiErrorMapper.NetworkUnavailable();
+        }
         catch (HttpRequestException)
+        {
+            throw OpenAiErrorMapper.NetworkUnavailable();
+        }
+        catch (IOException)
         {
             throw OpenAiErrorMapper.NetworkUnavailable();
         }

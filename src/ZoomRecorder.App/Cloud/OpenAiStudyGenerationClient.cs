@@ -26,12 +26,13 @@ internal sealed class OpenAiStudyGenerationClient(OpenAiApiClient api) : IStudyG
 
         try
         {
+            ValidateLectureJson(output);
             var package = JsonSerializer.Deserialize<StudyPackage>(output, OpenAiJson.Options)
                 ?? throw new JsonException("The study package was empty.");
             StudyPackageValidator.Validate(package);
             return package;
         }
-        catch (Exception error) when (error is JsonException or StudyPackageValidationException)
+        catch (Exception error) when (error is JsonException or InvalidDataException or StudyPackageValidationException)
         {
             throw OpenAiErrorMapper.InvalidResponse();
         }
@@ -61,6 +62,7 @@ internal sealed class OpenAiStudyGenerationClient(OpenAiApiClient api) : IStudyG
 
         try
         {
+            ValidateGuideJson(output);
             var guide = JsonSerializer.Deserialize<ClassStudyGuide>(output, OpenAiJson.Options)
                 ?? throw new JsonException("The class guide was empty.");
             ValidateGuide(guide);
@@ -140,7 +142,15 @@ internal sealed class OpenAiStudyGenerationClient(OpenAiApiClient api) : IStudyG
         {
             throw;
         }
+        catch (OperationCanceledException)
+        {
+            throw OpenAiErrorMapper.NetworkUnavailable();
+        }
         catch (HttpRequestException)
+        {
+            throw OpenAiErrorMapper.NetworkUnavailable();
+        }
+        catch (IOException)
         {
             throw OpenAiErrorMapper.NetworkUnavailable();
         }
@@ -180,6 +190,109 @@ internal sealed class OpenAiStudyGenerationClient(OpenAiApiClient api) : IStudyG
             {
                 throw new InvalidDataException("The class study guide has invalid content.");
             }
+        }
+    }
+
+    private static void ValidateLectureJson(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = RequireObject(document.RootElement);
+        RequireProperties(root,
+            "schemaVersion", "lectureTitle", "lectureDate", "shortSummary", "noteSections",
+            "keyTerms", "assignments", "reviewQuestions", "studyGuideContributions");
+
+        foreach (var section in RequireArray(root, "noteSections").EnumerateArray())
+        {
+            var value = RequireObject(section);
+            RequireProperties(value, "heading", "body", "timestampReferences");
+            ValidateTimestampReferences(RequireArray(value, "timestampReferences"));
+        }
+
+        foreach (var keyTerm in RequireArray(root, "keyTerms").EnumerateArray())
+        {
+            var value = RequireObject(keyTerm);
+            RequireProperties(value, "term", "definition", "timestampReferences");
+            ValidateTimestampReferences(RequireArray(value, "timestampReferences"));
+        }
+
+        foreach (var assignment in RequireArray(root, "assignments").EnumerateArray())
+        {
+            var value = RequireObject(assignment);
+            RequireProperties(value,
+                "description", "dueDateText", "normalizedDueDate", "confidence", "sourceTimestamp");
+            ValidateTimestamp(RequireObject(RequiredProperty(value, "sourceTimestamp")));
+        }
+
+        foreach (var question in RequireArray(root, "reviewQuestions").EnumerateArray())
+        {
+            RequireProperties(RequireObject(question), "question", "suggestedAnswer", "supportingSection");
+        }
+
+        ValidateContributions(RequireArray(root, "studyGuideContributions"));
+    }
+
+    private static void ValidateGuideJson(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = RequireObject(document.RootElement);
+        RequireProperties(root, "schemaVersion", "topics");
+        ValidateContributions(RequireArray(root, "topics"));
+    }
+
+    private static void ValidateContributions(JsonElement contributions)
+    {
+        foreach (var contribution in contributions.EnumerateArray())
+        {
+            var value = RequireObject(contribution);
+            RequireProperties(value, "topic", "contributions");
+            RequireArray(value, "contributions");
+        }
+    }
+
+    private static void ValidateTimestampReferences(JsonElement references)
+    {
+        foreach (var reference in references.EnumerateArray())
+        {
+            ValidateTimestamp(RequireObject(reference));
+        }
+    }
+
+    private static void ValidateTimestamp(JsonElement timestamp) =>
+        RequireProperties(timestamp, "startMilliseconds", "endMilliseconds");
+
+    private static JsonElement RequireObject(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("The structured OpenAI response is missing required members.");
+        }
+        return value;
+    }
+
+    private static JsonElement RequireArray(JsonElement value, string name)
+    {
+        var property = RequiredProperty(value, name);
+        if (property.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException("The structured OpenAI response is missing required members.");
+        }
+        return property;
+    }
+
+    private static JsonElement RequiredProperty(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property))
+        {
+            throw new InvalidDataException("The structured OpenAI response is missing required members.");
+        }
+        return property;
+    }
+
+    private static void RequireProperties(JsonElement value, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            RequiredProperty(value, name);
         }
     }
 

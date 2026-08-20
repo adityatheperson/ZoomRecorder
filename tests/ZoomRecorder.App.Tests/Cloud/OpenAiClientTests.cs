@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ZoomRecorder.App.Cloud;
 using ZoomRecorder.Core.Processing;
 
@@ -160,6 +161,35 @@ public sealed class OpenAiClientTests
         Assert.DoesNotContain(LectureContent, error.ToString(), StringComparison.Ordinal);
         Assert.Single(handler.Requests);
         Assert.Empty(scheduler.Delays);
+    }
+
+    [Theory]
+    [InlineData("transcription", "io")]
+    [InlineData("transcription", "http-io")]
+    [InlineData("transcription", "non-caller-cancellation")]
+    [InlineData("study", "io")]
+    [InlineData("study", "http-io")]
+    [InlineData("study", "non-caller-cancellation")]
+    public async Task Response_body_stream_failures_map_to_sanitized_NetworkUnavailable(
+        string operation,
+        string failure)
+    {
+        using var audio = new TestAudioFile("audio");
+        var handler = new RecordingHandler();
+        handler.Enqueue(_ => ThrowingBody(failure));
+        using var http = new HttpClient(handler);
+        var api = CreateApi(http);
+
+        var error = operation == "transcription"
+            ? await Assert.ThrowsAsync<CloudProcessingException>(() =>
+                new OpenAiTranscriptionClient(api).TranscribeAsync(audio.Chunk(), default))
+            : await Assert.ThrowsAsync<CloudProcessingException>(() =>
+                new OpenAiStudyGenerationClient(api).GenerateLectureAsync(Transcript(), default));
+
+        Assert.Equal(CloudErrorCode.NetworkUnavailable, error.Code);
+        Assert.DoesNotContain(ApiKey, error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(LectureContent, error.ToString(), StringComparison.Ordinal);
+        Assert.Single(handler.Requests);
     }
 
     [Fact]
@@ -321,6 +351,29 @@ public sealed class OpenAiClientTests
         Assert.Single(handler.Requests);
     }
 
+    [Theory]
+    [InlineData("note.startMilliseconds")]
+    [InlineData("note.endMilliseconds")]
+    [InlineData("keyTerm.startMilliseconds")]
+    [InlineData("keyTerm.endMilliseconds")]
+    [InlineData("assignment.confidence")]
+    [InlineData("assignment.normalizedDueDate")]
+    [InlineData("assignment.startMilliseconds")]
+    [InlineData("assignment.endMilliseconds")]
+    public async Task Omitted_required_value_members_map_to_InvalidResponse(string member)
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue(_ => Responses(PackageWithoutRequiredValue(member)));
+        using var http = new HttpClient(handler);
+        var generator = new OpenAiStudyGenerationClient(CreateApi(http));
+
+        var error = await Assert.ThrowsAsync<CloudProcessingException>(() =>
+            generator.GenerateLectureAsync(Transcript(), default));
+
+        Assert.Equal(CloudErrorCode.InvalidResponse, error.Code);
+        Assert.Single(handler.Requests);
+    }
+
     [Fact]
     public async Task Invalid_class_guide_response_maps_to_InvalidResponse()
     {
@@ -410,6 +463,52 @@ public sealed class OpenAiClientTests
 
     private static string ValidPackageJson() => JsonSerializer.Serialize(ValidPackage(), JsonOptions);
 
+    private static string PackageWithoutRequiredValue(string member)
+    {
+        var package = JsonNode.Parse(ValidPackageJson())!.AsObject();
+        var noteTimestamp = package["noteSections"]!.AsArray()[0]!.AsObject()
+            ["timestampReferences"]!.AsArray()[0]!.AsObject();
+        var keyTermTimestamp = package["keyTerms"]!.AsArray()[0]!.AsObject()
+            ["timestampReferences"]!.AsArray()[0]!.AsObject();
+        var assignment = package["assignments"]!.AsArray()[0]!.AsObject();
+        var assignmentTimestamp = assignment["sourceTimestamp"]!.AsObject();
+
+        switch (member)
+        {
+            case "note.startMilliseconds":
+                noteTimestamp.Remove("startMilliseconds");
+                break;
+            case "note.endMilliseconds":
+                noteTimestamp["startMilliseconds"] = 0;
+                noteTimestamp.Remove("endMilliseconds");
+                break;
+            case "keyTerm.startMilliseconds":
+                keyTermTimestamp.Remove("startMilliseconds");
+                break;
+            case "keyTerm.endMilliseconds":
+                keyTermTimestamp["startMilliseconds"] = 0;
+                keyTermTimestamp.Remove("endMilliseconds");
+                break;
+            case "assignment.confidence":
+                assignment.Remove("confidence");
+                break;
+            case "assignment.normalizedDueDate":
+                assignment.Remove("normalizedDueDate");
+                break;
+            case "assignment.startMilliseconds":
+                assignmentTimestamp.Remove("startMilliseconds");
+                break;
+            case "assignment.endMilliseconds":
+                assignmentTimestamp["startMilliseconds"] = 0;
+                assignmentTimestamp.Remove("endMilliseconds");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(member));
+        }
+
+        return package.ToJsonString(JsonOptions);
+    }
+
     private static ClassStudyGuide ValidGuide() => new(
         SchemaVersion: 1,
         Topics: [new StudyGuideContribution("Thermodynamics", ["Review entropy"])]);
@@ -447,6 +546,22 @@ public sealed class OpenAiClientTests
         var response = Json(status, "{}");
         response.Headers.RetryAfter = new RetryConditionHeaderValue(date);
         return response;
+    }
+
+    private static HttpResponseMessage ThrowingBody(string failure)
+    {
+        var message = $"stream {ApiKey} {LectureContent}";
+        Exception exception = failure switch
+        {
+            "io" => new IOException(message),
+            "http-io" => new HttpIOException(HttpRequestError.ResponseEnded, message),
+            "non-caller-cancellation" => new OperationCanceledException(message),
+            _ => throw new ArgumentOutOfRangeException(nameof(failure))
+        };
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new ThrowingReadStream(exception))
+        };
     }
 
     private sealed class StaticCredentialVault(string? key) : ICredentialVault
@@ -499,6 +614,33 @@ public sealed class OpenAiClientTests
         string? Authorization,
         string? ContentType,
         string Body);
+
+    private sealed class ThrowingReadStream(Exception exception) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw exception;
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken) => Task.FromException<int>(exception);
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) => ValueTask.FromException<int>(exception);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     private sealed class TestAudioFile : IDisposable
     {
