@@ -6,7 +6,12 @@ public sealed class ZoomWindowAmbiguousException()
 public sealed class ZoomWindowTimeoutException()
     : TimeoutException("A Zoom meeting window did not become ready before the timeout.");
 
-public sealed class ZoomWindowDetector
+public interface IZoomWindowDetector
+{
+    Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken);
+}
+
+public sealed class ZoomWindowDetector : IZoomWindowDetector
 {
     private static readonly TimeSpan DefaultPollingInterval = TimeSpan.FromMilliseconds(250);
     private readonly IZoomWindowEnumerator enumerator;

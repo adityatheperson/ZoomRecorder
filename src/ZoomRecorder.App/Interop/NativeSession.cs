@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using ZoomRecorder.Core.Meetings;
 
 namespace ZoomRecorder.App.Interop;
 
@@ -19,20 +18,7 @@ internal sealed class NativeSession : IDisposable
         ThrowIfFailed(NativeMethods.zr_set_event_callback(handle.DangerousGetHandle(), callback, nint.Zero), "register native events");
     }
 
-    public void Prepare(MeetingJoinRequest request)
-    {
-        var clientId = Environment.GetEnvironmentVariable("ZOOM_CLIENT_ID", EnvironmentVariableTarget.User);
-        var clientSecret = Environment.GetEnvironmentVariable("ZOOM_CLIENT_SECRET", EnvironmentVariableTarget.User);
-        if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
-            throw new InvalidOperationException("Zoom Meeting SDK credentials are not configured.");
-        var jwt = MeetingSdkJwtFactory.Create(clientId, clientSecret, DateTimeOffset.UtcNow);
-        var payload = JsonSerializer.Serialize(new { request.MeetingId, request.Passcode, Jwt = jwt });
-        lastNativeError = null;
-        ThrowIfFailed(NativeMethods.zr_prepare_meeting(handle.DangerousGetHandle(), payload), "prepare Zoom meeting");
-    }
-    public void SetMeetingHost(nint windowHandle) => ThrowIfFailed(NativeMethods.zr_set_meeting_host(handle.DangerousGetHandle(), windowHandle), "set meeting capture area");
-    public void StartRecording(string path) { lastNativeError = null; ThrowIfFailed(NativeMethods.zr_start_recording(handle.DangerousGetHandle(), path), "start recording"); }
-    public void Enter() => ThrowIfFailed(NativeMethods.zr_enter_meeting(handle.DangerousGetHandle()), "enter Zoom meeting");
+    public void StartRecording(string path, nint meetingWindow) { lastNativeError = null; ThrowIfFailed(NativeMethods.zr_start_recording(handle.DangerousGetHandle(), path, meetingWindow), "start recording"); }
     public void FinalizeRecording() { lastNativeError = null; ThrowIfFailed(NativeMethods.zr_finalize_recording(handle.DangerousGetHandle()), "finalize recording"); }
     public void Dispose() => handle.Dispose();
 

@@ -21,7 +21,7 @@ namespace ZoomRecorder.App;
 public sealed partial class MainWindow : Window, IAppNavigator
 {
     private readonly NativeSession _nativeSession;
-    private readonly NativeJoinFlow _joinFlow;
+    private readonly ExternalZoomJoinFlow _joinFlow;
     private Task<LibraryContext?> _libraryInitialization;
     private LibraryShellViewModel? _shellViewModel;
     private int _navigationRequest;
@@ -40,7 +40,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
-        _joinFlow = new NativeJoinFlow(_nativeSession);
+        _joinFlow = new ExternalZoomJoinFlow(_nativeSession);
         _libraryInitialization = Task.FromResult<LibraryContext?>(CreateLibraryContext(services));
         _joinFlow.RecordingCompleted += (_, result) => _ = HandleRecordingCompletedAsync(result);
         _joinFlow.FinalizationFailed += (_, message) => DispatcherQueue.TryEnqueue(() =>
