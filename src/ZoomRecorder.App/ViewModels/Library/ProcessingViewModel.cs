@@ -1,0 +1,96 @@
+using ZoomRecorder.Core.Processing;
+
+namespace ZoomRecorder.App.ViewModels.Library;
+
+public interface ICloudNoticePresenter
+{
+    Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken);
+}
+
+public sealed class ProcessingViewModel : LibraryViewModelBase
+{
+    private readonly ICloudNoticePresenter notice;
+    private readonly Func<bool, CancellationToken, Task> start;
+    private readonly Func<CancellationToken, Task> cancel;
+    private bool deleteVideoAfterSuccess;
+    private bool isProcessing;
+    private string statusText = "Ready to process";
+
+    public ProcessingViewModel(
+        string className,
+        long? estimatedUploadBytes,
+        bool savedDeleteDefault,
+        ICloudNoticePresenter notice,
+        Func<bool, CancellationToken, Task> start,
+        Func<CancellationToken, Task> cancel,
+        decimal? estimatedCost = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(className);
+        ClassName = className;
+        EstimatedUploadText = estimatedUploadBytes is { } bytes ? FormatBytes(bytes) : null;
+        EstimatedCostText = estimatedCost is { } cost ? cost.ToString("C4") : null;
+        deleteVideoAfterSuccess = savedDeleteDefault;
+        this.notice = notice ?? throw new ArgumentNullException(nameof(notice));
+        this.start = start ?? throw new ArgumentNullException(nameof(start));
+        this.cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
+    }
+
+    public string ClassName { get; }
+    public string? EstimatedUploadText { get; }
+    public string? EstimatedCostText { get; }
+    public bool CloudNoticeWasPresented { get; private set; }
+    public bool DeleteVideoAfterSuccess
+    {
+        get => deleteVideoAfterSuccess;
+        set { if (deleteVideoAfterSuccess != value) { deleteVideoAfterSuccess = value; RaisePropertyChanged(); } }
+    }
+    public bool IsProcessing => isProcessing;
+    public string StatusText => statusText;
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        CloudNoticeWasPresented = true;
+        var estimate = EstimatedUploadText is null ? string.Empty : $" Estimated upload: {EstimatedUploadText}.";
+        var cost = EstimatedCostText is null ? string.Empty : $" Estimated cost: {EstimatedCostText}.";
+        if (!await notice.ConfirmAsync(
+            $"Audio from {ClassName} will leave this PC and be sent to OpenAI for processing.{estimate}{cost}",
+            cancellationToken))
+        {
+            return;
+        }
+
+        isProcessing = true;
+        RaisePropertyChanged(nameof(IsProcessing));
+        await start(DeleteVideoAfterSuccess, cancellationToken);
+    }
+
+    public Task CancelAsync(CancellationToken cancellationToken) => cancel(cancellationToken);
+
+    public void Apply(ProcessingProgress progress)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        statusText = progress.State switch
+        {
+            ProcessingState.PreparingAudio => "Preparing audio",
+            ProcessingState.Transcribing => "Transcribing",
+            ProcessingState.GeneratingStudyPackage => "Creating study materials",
+            ProcessingState.UpdatingClassGuide => "Updating class guide",
+            ProcessingState.Completed => "Completed",
+            ProcessingState.NeedsAttention => "Needs attention",
+            ProcessingState.Cancelled => "Cancelled",
+            _ => "Ready to process"
+        };
+        isProcessing = progress.State is ProcessingState.PreparingAudio or ProcessingState.Transcribing or
+            ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide;
+        RaisePropertyChanged(nameof(StatusText));
+        RaisePropertyChanged(nameof(IsProcessing));
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 0) throw new ArgumentOutOfRangeException(nameof(bytes));
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024d:0.0} KB";
+        return $"{bytes / (1024d * 1024d):0.0} MB";
+    }
+}

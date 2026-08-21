@@ -63,20 +63,20 @@
             </TabViewItem>
             <TabViewItem Header="Study guide">
                 <StackPanel Padding="20" Spacing="8">
-                    <TextBlock Text="Study guide pending" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Study materials will appear here after the later processing phase. No content has been generated yet." TextWrapping="Wrap" />
+                    <TextBlock Text="Class study guide" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="The guide combines completed lectures in recording order. A pending badge appears while it is rebuilding." TextWrapping="Wrap" />
                 </StackPanel>
             </TabViewItem>
             <TabViewItem Header="Assignments">
                 <StackPanel Padding="20" Spacing="8">
-                    <TextBlock Text="No assignments yet" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Assignments will appear only after study processing finds them or you add them in a later phase." TextWrapping="Wrap" />
+                    <TextBlock Text="Assignments" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Confirmed edits are preserved when study materials are refreshed." TextWrapping="Wrap" />
                 </StackPanel>
             </TabViewItem>
             <TabViewItem Header="Class settings">
                 <StackPanel Padding="20" Spacing="8">
-                    <TextBlock Text="Class settings are coming in the processing phase." Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Your class name, term, and recordings remain stored locally." TextWrapping="Wrap" />
+                    <TextBlock Text="Remembered meetings" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Forget a remembered meeting ID to change only future recording assignments; existing lectures stay in this class." TextWrapping="Wrap" />
                 </StackPanel>
             </TabViewItem>
         </TabView>

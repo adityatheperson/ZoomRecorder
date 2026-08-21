@@ -1,0 +1,23 @@
+<Page
+    x:Class="ZoomRecorder.App.Views.Library.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer>
+        <StackPanel Padding="36" Width="680" HorizontalAlignment="Center" Spacing="16">
+            <TextBlock Text="Settings" Style="{ThemeResource TitleTextBlockStyle}" />
+            <TextBlock Text="OpenAI API key" Style="{ThemeResource SubtitleTextBlockStyle}" />
+            <PasswordBox x:Name="ApiKeyBox" PasswordChar="●" PlaceholderText="sk-…" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Save key" Style="{ThemeResource AccentButtonStyle}" Click="SaveKeyClicked" />
+                <Button Content="Test key" Click="TestKeyClicked" />
+                <Button Content="Delete key" Click="DeleteKeyClicked" />
+            </StackPanel>
+            <InfoBar x:Name="KeyStatus" IsOpen="False" />
+            <CheckBox Content="Default future jobs to delete video after verified processing"
+                      IsChecked="{Binding DeleteVideoByDefault, Mode=TwoWay}" />
+            <Button Content="Save preferences" HorizontalAlignment="Left" Click="SavePreferencesClicked" />
+            <TextBlock Text="Privacy" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,12,0,0" />
+            <TextBlock Text="{Binding PrivacyText}" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

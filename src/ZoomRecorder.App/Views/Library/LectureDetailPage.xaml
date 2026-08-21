@@ -1,0 +1,31 @@
+<Page
+    x:Class="ZoomRecorder.App.Views.Library.LectureDetailPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="36" MaxWidth="1100" HorizontalAlignment="Center">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <Button Content="Back" Click="BackClicked" />
+            <TextBlock Grid.Column="1" Text="{Binding Title}" Style="{ThemeResource TitleTextBlockStyle}" VerticalAlignment="Center" />
+            <Button Grid.Column="2" Content="Refresh study materials" IsEnabled="{Binding CanRefreshStudyMaterials}" Click="RefreshClicked" />
+        </Grid>
+        <TabView Grid.Row="1" Margin="0,18,0,0" IsAddTabButtonVisible="False">
+            <TabViewItem Header="Summary"><TextBox Text="{Binding Summary, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" Padding="16" /></TabViewItem>
+            <TabViewItem Header="Notes"><ListView ItemsSource="{Binding Notes}" DisplayMemberPath="Heading" /></TabViewItem>
+            <TabViewItem Header="Transcript">
+                <Grid Padding="16">
+                    <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBox Text="{Binding TranscriptText, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" />
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+                        <Button Content="Save transcript" Click="SaveTranscriptClicked" />
+                        <TextBlock Text="Changes make generated study materials stale." VerticalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+            </TabViewItem>
+            <TabViewItem Header="Key terms"><ListView ItemsSource="{Binding KeyTerms}" DisplayMemberPath="Term" /></TabViewItem>
+            <TabViewItem Header="Assignments"><ListView ItemsSource="{Binding Assignments}" DisplayMemberPath="Description" /></TabViewItem>
+            <TabViewItem Header="Review questions"><ListView ItemsSource="{Binding ReviewQuestions}" DisplayMemberPath="Question" /></TabViewItem>
+        </TabView>
+    </Grid>
+</Page>
