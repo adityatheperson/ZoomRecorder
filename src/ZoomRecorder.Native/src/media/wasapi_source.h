@@ -7,6 +7,16 @@
 
 class WasapiSourceImpl;
 
+enum class WasapiStartupStage {
+  ThreadStarted,
+  ClientStarted,
+  FirstPacket,
+};
+
+constexpr bool wasapi_stage_is_ready(WasapiStartupStage stage) {
+  return stage != WasapiStartupStage::ThreadStarted;
+}
+
 class WasapiSource {
  public:
   using SamplesCallback = std::function<void(std::span<const float>, unsigned int, unsigned short, std::int64_t)>;

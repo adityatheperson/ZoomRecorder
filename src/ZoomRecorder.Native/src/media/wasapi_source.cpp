@@ -49,6 +49,8 @@ class WasapiSourceImpl {
         FAILED(client->SetEventHandle(sample_event)) || FAILED(client->GetService(IID_PPV_ARGS(&capture))) || FAILED(client->Start())) {
       fail(loopback_ ? "Meeting audio capture failed" : "Microphone capture failed"); cleanup(); return;
     }
+    if (wasapi_stage_is_ready(WasapiStartupStage::ClientStarted) && !ready_.exchange(true))
+      health_(true, loopback_ ? "Meeting audio ready" : "Microphone ready");
     HANDLE waits[]{stop_event_, sample_event};
     while (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
       UINT32 packets{}; if (FAILED(capture->GetNextPacketSize(&packets))) break;
@@ -65,7 +67,6 @@ class WasapiSourceImpl {
         } else { capture->ReleaseBuffer(frames); fail("Unsupported audio device format"); cleanup(); return; }
         const auto now = std::chrono::steady_clock::now().time_since_epoch();
         samples_(converted, format->nSamplesPerSec, format->nChannels, std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
-        if (!ready_.exchange(true)) health_(true, loopback_ ? "Meeting audio ready" : "Microphone ready");
         capture->ReleaseBuffer(frames); if (FAILED(capture->GetNextPacketSize(&packets))) packets = 0;
       }
     }

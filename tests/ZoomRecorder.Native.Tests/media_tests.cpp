@@ -1,10 +1,15 @@
 #include "audio_mixer.h"
 #include "audio_sample_timeline.h"
 #include "recording_readiness.h"
+#include "wasapi_source.h"
 #include <cmath>
 #include <vector>
 
 bool run_media_tests() {
+  if (wasapi_stage_is_ready(WasapiStartupStage::ThreadStarted)) return false;
+  if (!wasapi_stage_is_ready(WasapiStartupStage::ClientStarted)) return false;
+  if (!wasapi_stage_is_ready(WasapiStartupStage::FirstPacket)) return false;
+
   AudioSampleTimeline timeline(48000, 2);
   const auto first = timeline.next(960);
   const auto second = timeline.next(480);
