@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Data.Sqlite;
 using ZoomRecorder.App.Data;
 using ZoomRecorder.Core.Library;
+using ZoomRecorder.Core.Processing;
 
 namespace ZoomRecorder.App.Tests.Data;
 
@@ -453,6 +454,87 @@ public sealed class SqliteLibraryRepositoryTests
         await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
 
         await Assert.ThrowsAsync<ArgumentException>(() => Repository(database).CreateClassAsync("  ", null, default));
+    }
+
+    [Fact]
+    public async Task Study_material_updates_preserve_confirmed_ids_and_manage_stale_state()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var course = await repository.CreateClassAsync("Algorithms", null, default);
+        var recording = await repository.AddRecordingAsync(Recording(Guid.NewGuid(), course.Id, temp.File("algorithms.mp4")), default);
+        var jobId = Guid.NewGuid();
+        var assignmentId = Guid.NewGuid();
+        await using (var seed = database.Connection.CreateCommand())
+        {
+            seed.CommandText = """
+                INSERT INTO processing_jobs(id, recording_id, class_id, mp4_path, job_directory, state, delete_video,
+                    transcript_committed, lecture_package_committed, assignments_committed, guide_outcome, revision, created_at, updated_at)
+                VALUES ($job, $recording, $class, $mp4, $dir, 'Completed', 0, 1, 1, 1, 'Succeeded', 1, $now, $now);
+                INSERT INTO processing_transcripts(job_id, artifact_path, artifact_sha256) VALUES ($job, 'old.json', $oldHash);
+                INSERT INTO lecture_packages(recording_id, schema_version, artifact_path, artifact_sha256, source_transcript_hash, is_stale, updated_at)
+                VALUES ($recording, 1, 'package.json', $oldHash, $oldHash, 0, $now);
+                INSERT INTO assignments(id, recording_id, description, due_date_text, confidence, is_user_confirmed, source_timestamp_ms, source_order)
+                VALUES ($assignment, $recording, 'Keep me', 'Monday', .9, 1, 100, 0);
+                """;
+            seed.Parameters.AddWithValue("$job", jobId.ToString("D"));
+            seed.Parameters.AddWithValue("$recording", recording.Id.ToString("D"));
+            seed.Parameters.AddWithValue("$class", course.Id.ToString("D"));
+            seed.Parameters.AddWithValue("$assignment", assignmentId.ToString("D"));
+            seed.Parameters.AddWithValue("$mp4", recording.FilePath);
+            seed.Parameters.AddWithValue("$dir", temp.File("job"));
+            seed.Parameters.AddWithValue("$now", CreatedAt.ToString("O"));
+            seed.Parameters.AddWithValue("$oldHash", new string('a', 64));
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        var edited = new ArtifactCheckpoint(temp.File("edited.json"), new string('b', 64));
+        await repository.SaveEditedTranscriptAsync(recording.Id, edited, default);
+        Assert.Equal(edited, await repository.GetTranscriptAsync(recording.Id, default));
+        await using (var stale = database.Connection.CreateCommand())
+        {
+            stale.CommandText = "SELECT is_stale FROM lecture_packages WHERE recording_id = $id";
+            stale.Parameters.AddWithValue("$id", recording.Id.ToString("D"));
+            Assert.Equal(1L, await stale.ExecuteScalarAsync());
+        }
+
+        var assignments = await repository.ListAssignmentsAsync(recording.Id, default);
+        Assert.Equal(assignmentId, Assert.Single(assignments).Id);
+        await repository.SaveRefreshedPackageAsync(
+            recording.Id,
+            new ArtifactCheckpoint(temp.File("refreshed.json"), new string('c', 64)),
+            edited.Sha256,
+            assignments,
+            default);
+
+        await using var verify = database.Connection.CreateCommand();
+        verify.CommandText = "SELECT is_stale FROM lecture_packages WHERE recording_id = $id";
+        verify.Parameters.AddWithValue("$id", recording.Id.ToString("D"));
+        Assert.Equal(0L, await verify.ExecuteScalarAsync());
+        Assert.Equal(assignmentId, Assert.Single(await repository.ListAssignmentsAsync(recording.Id, default)).Id);
+    }
+
+    [Fact]
+    public async Task Reassignment_marks_both_class_guides_pending_atomically()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var repository = Repository(database);
+        var oldClass = await repository.CreateClassAsync("Old", null, default);
+        var newClass = await repository.CreateClassAsync("New", null, default);
+        var recording = await repository.AddRecordingAsync(Recording(Guid.NewGuid(), oldClass.Id, temp.File("move.mp4")), default);
+
+        var returnedOld = await repository.ReassignAndMarkGuidesPendingAsync(recording.Id, newClass.Id, default);
+
+        Assert.Equal(oldClass.Id, returnedOld);
+        Assert.Equal(newClass.Id, Assert.Single(await repository.ListRecordingsAsync(newClass.Id, default)).ClassId);
+        await using var verify = database.Connection.CreateCommand();
+        verify.CommandText = "SELECT class_id FROM class_study_guides WHERE is_update_pending = 1 ORDER BY class_id";
+        await using var reader = await verify.ExecuteReaderAsync();
+        var pending = new List<Guid>();
+        while (await reader.ReadAsync()) pending.Add(Guid.Parse(reader.GetString(0)));
+        Assert.Equal(new[] { oldClass.Id, newClass.Id }.OrderBy(id => id), pending);
     }
 
     private static SqliteLibraryRepository Repository(LibraryDatabase database) => new(database, () => CreatedAt);

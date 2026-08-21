@@ -1,10 +1,11 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using ZoomRecorder.Core.Library;
+using ZoomRecorder.Core.Processing;
 
 namespace ZoomRecorder.App.Data;
 
-public sealed class SqliteLibraryRepository : ILibraryRepository
+public sealed class SqliteLibraryRepository : ILibraryRepository, IStudyMaterialStore
 {
     private const string RecordingColumns =
         "id, class_id, file_path, file_name, meeting_id, recorded_at, duration_ms, byte_size, video_available";
@@ -263,6 +264,229 @@ public sealed class SqliteLibraryRepository : ILibraryRepository
             command.Parameters.AddWithValue("$meetingId", meetingId);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<StoredStudyAssignment>> ListAssignmentsAsync(
+        Guid recordingId,
+        CancellationToken cancellationToken) =>
+        WithConnectionAsync<IReadOnlyList<StoredStudyAssignment>>(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, description, due_date_text, due_at, confidence,
+                       is_user_confirmed, source_timestamp_ms, source_order
+                FROM assignments WHERE recording_id = $recordingId
+                ORDER BY source_order, id;
+                """;
+            command.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var result = new List<StoredStudyAssignment>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new StoredStudyAssignment(
+                    ParseGuid(reader.GetString(0)),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? string.Empty : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : DateOnly.ParseExact(reader.GetString(3), "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    reader.GetDouble(4),
+                    reader.GetInt64(5) != 0,
+                    reader.IsDBNull(6) ? 0 : reader.GetInt64(6),
+                    reader.GetInt32(7)));
+            }
+
+            return result;
+        }, cancellationToken);
+
+    public Task<ArtifactCheckpoint> GetTranscriptAsync(Guid recordingId, CancellationToken cancellationToken) =>
+        WithConnectionAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT transcript.artifact_path, transcript.artifact_sha256
+                FROM processing_transcripts transcript
+                INNER JOIN processing_jobs job ON job.id = transcript.job_id
+                WHERE job.recording_id = $recordingId
+                ORDER BY job.updated_at DESC, job.id DESC LIMIT 1;
+                """;
+            command.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new KeyNotFoundException("The recording has no transcript.");
+            }
+
+            return new ArtifactCheckpoint(reader.GetString(0), reader.GetString(1));
+        }, cancellationToken);
+
+    public Task SaveEditedTranscriptAsync(
+        Guid recordingId,
+        ArtifactCheckpoint transcript,
+        CancellationToken cancellationToken) =>
+        WithTransactionAsync(async (connection, transaction) =>
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE processing_transcripts
+                SET artifact_path = $path, artifact_sha256 = $hash
+                WHERE job_id = (
+                    SELECT id FROM processing_jobs WHERE recording_id = $recordingId
+                    ORDER BY updated_at DESC, id DESC LIMIT 1);
+                UPDATE lecture_packages SET is_stale = 1, updated_at = $updatedAt
+                WHERE recording_id = $recordingId;
+                """;
+            command.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            command.Parameters.AddWithValue("$path", transcript.Path);
+            command.Parameters.AddWithValue("$hash", transcript.Sha256);
+            command.Parameters.AddWithValue("$updatedAt", TimestampText(_utcNow()));
+            if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
+            {
+                throw new KeyNotFoundException("The recording has no transcript or lecture package.");
+            }
+        }, cancellationToken);
+
+    public Task SaveRefreshedPackageAsync(
+        Guid recordingId,
+        ArtifactCheckpoint package,
+        string sourceTranscriptSha256,
+        IReadOnlyList<StoredStudyAssignment> assignments,
+        CancellationToken cancellationToken) =>
+        WithTransactionAsync(async (connection, transaction) =>
+        {
+            await using (var update = connection.CreateCommand())
+            {
+                update.Transaction = transaction;
+                update.CommandText = """
+                    UPDATE lecture_packages SET artifact_path = $path, artifact_sha256 = $hash,
+                        source_transcript_hash = $sourceHash, is_stale = 0, updated_at = $updatedAt
+                    WHERE recording_id = $recordingId;
+                    DELETE FROM assignments WHERE recording_id = $recordingId;
+                    """;
+                update.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+                update.Parameters.AddWithValue("$path", package.Path);
+                update.Parameters.AddWithValue("$hash", package.Sha256);
+                update.Parameters.AddWithValue("$sourceHash", sourceTranscriptSha256);
+                update.Parameters.AddWithValue("$updatedAt", TimestampText(_utcNow()));
+                await update.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            foreach (var assignment in assignments)
+            {
+                await using var insert = connection.CreateCommand();
+                insert.Transaction = transaction;
+                insert.CommandText = """
+                    INSERT INTO assignments(id, recording_id, description, due_date_text, due_at, confidence,
+                        is_user_confirmed, source_timestamp_ms, source_order)
+                    VALUES ($id, $recordingId, $description, $dueText, $dueAt, $confidence,
+                        $confirmed, $timestamp, $sourceOrder);
+                    """;
+                insert.Parameters.AddWithValue("$id", GuidText(assignment.Id));
+                insert.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+                insert.Parameters.AddWithValue("$description", assignment.Description);
+                insert.Parameters.AddWithValue("$dueText", assignment.DueDateText);
+                insert.Parameters.AddWithValue("$dueAt", assignment.NormalizedDueDate is { } due
+                    ? due.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : DBNull.Value);
+                insert.Parameters.AddWithValue("$confidence", assignment.Confidence);
+                insert.Parameters.AddWithValue("$confirmed", BooleanInteger(assignment.IsUserConfirmed));
+                insert.Parameters.AddWithValue("$timestamp", assignment.SourceTimestampMilliseconds);
+                insert.Parameters.AddWithValue("$sourceOrder", assignment.SourceOrder);
+                await insert.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }, cancellationToken);
+
+    public Task<IReadOnlyList<CompletedLecturePackage>> ListCompletedPackagesAsync(
+        Guid classId,
+        CancellationToken cancellationToken) =>
+        WithConnectionAsync<IReadOnlyList<CompletedLecturePackage>>(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT recordings.recorded_at, packages.artifact_path, packages.artifact_sha256
+                FROM lecture_packages packages
+                INNER JOIN recordings ON recordings.id = packages.recording_id
+                WHERE recordings.class_id = $classId AND packages.is_stale = 0
+                  AND EXISTS (SELECT 1 FROM processing_jobs jobs
+                              WHERE jobs.recording_id = recordings.id AND jobs.state = 'Completed')
+                ORDER BY recordings.recorded_at, recordings.id;
+                """;
+            command.Parameters.AddWithValue("$classId", GuidText(classId));
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var result = new List<CompletedLecturePackage>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                result.Add(new CompletedLecturePackage(
+                    ParseTimestamp(reader.GetString(0)),
+                    new ArtifactCheckpoint(reader.GetString(1), reader.GetString(2))));
+            }
+            return result;
+        }, cancellationToken);
+
+    public Task SaveClassGuideAsync(Guid classId, ArtifactCheckpoint guide, CancellationToken cancellationToken) =>
+        WithConnectionAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO class_study_guides(class_id, schema_version, artifact_path, artifact_sha256, is_update_pending, updated_at)
+                VALUES ($classId, 1, $path, $hash, 0, $updatedAt)
+                ON CONFLICT(class_id) DO UPDATE SET artifact_path = excluded.artifact_path,
+                    artifact_sha256 = excluded.artifact_sha256, is_update_pending = 0, updated_at = excluded.updated_at;
+                """;
+            command.Parameters.AddWithValue("$classId", GuidText(classId));
+            command.Parameters.AddWithValue("$path", guide.Path);
+            command.Parameters.AddWithValue("$hash", guide.Sha256);
+            command.Parameters.AddWithValue("$updatedAt", TimestampText(_utcNow()));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }, cancellationToken);
+
+    public Task<Guid?> ReassignAndMarkGuidesPendingAsync(
+        Guid recordingId,
+        Guid newClassId,
+        CancellationToken cancellationToken) =>
+        WithTransactionAsync<Guid?>(async (connection, transaction) =>
+        {
+            Guid? oldClassId;
+            await using (var read = connection.CreateCommand())
+            {
+                read.Transaction = transaction;
+                read.CommandText = "SELECT class_id FROM recordings WHERE id = $id;";
+                read.Parameters.AddWithValue("$id", GuidText(recordingId));
+                var value = await read.ExecuteScalarAsync(cancellationToken);
+                if (value is null) throw new KeyNotFoundException("The recording does not exist.");
+                oldClassId = value is DBNull ? null : ParseGuid((string)value);
+            }
+
+            await UpdateRecordingClassAsync(connection, transaction, recordingId, newClassId, cancellationToken);
+            foreach (var classId in new[] { oldClassId, newClassId }.Distinct())
+            {
+                if (classId is { } id)
+                {
+                    await UpsertGuidePendingAsync(connection, transaction, id, _utcNow(), cancellationToken);
+                }
+            }
+            return oldClassId;
+        }, cancellationToken);
+
+    public Task MarkGuideRebuildRequestedAsync(Guid classId, CancellationToken cancellationToken) =>
+        WithConnectionAsync(connection => UpsertGuidePendingAsync(
+            connection, transaction: null, classId, _utcNow(), cancellationToken), cancellationToken);
+
+    private static async Task UpsertGuidePendingAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        Guid classId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO class_study_guides(class_id, schema_version, artifact_path, artifact_sha256, is_update_pending, updated_at)
+            VALUES ($classId, 1, '', '', 1, $updatedAt)
+            ON CONFLICT(class_id) DO UPDATE SET is_update_pending = 1, updated_at = excluded.updated_at;
+            """;
+        command.Parameters.AddWithValue("$classId", GuidText(classId));
+        command.Parameters.AddWithValue("$updatedAt", TimestampText(now));
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private Task<IReadOnlyList<RecordingRecord>> ReadRecordingsAsync(
