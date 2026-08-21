@@ -63,6 +63,36 @@ public sealed class ExternalZoomJoinFlowTests
         Assert.Equal(1, completions);
     }
 
+    [Fact]
+    public async Task Zero_byte_capture_is_not_published_as_completed()
+    {
+        var recording = new FakeRecording([], resultByteSize: 0);
+        var flow = new ExternalZoomJoinFlow(
+            new FakeStore([]), new FakeLauncher([]), new FakeDetector([], (nint)42), recording);
+        var completions = 0;
+        flow.RecordingCompleted += (_, _) => completions++;
+        await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
+
+        await flow.StopAndSaveAsync();
+
+        Assert.Equal(0, completions);
+    }
+
+    [Fact]
+    public async Task Native_callback_hands_finalization_off_before_stopping_capture()
+    {
+        var recording = new FakeRecording([]);
+        var flow = new ExternalZoomJoinFlow(
+            new FakeStore([]), new FakeLauncher([]), new FakeDetector([], (nint)42), recording);
+        await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
+
+        flow.HandleNativeEvent("{\"type\":\"capture_ended\"}");
+
+        Assert.Equal(0, recording.StopCount);
+        await recording.Finalized.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, recording.StopCount);
+    }
+
     private sealed class FakeStore(List<string> events) : IRecordingStore
     {
         public Task<RecordingTarget> PrepareAsync(MeetingJoinRequest request, CancellationToken cancellationToken)
@@ -96,7 +126,7 @@ public sealed class ExternalZoomJoinFlowTests
             Task.FromException<nint>(exception);
     }
 
-    private sealed class FakeRecording(List<string> events) : IWindowRecordingSession
+    private sealed class FakeRecording(List<string> events, long resultByteSize = 1) : IWindowRecordingSession
     {
         public RecordingTarget? Target { get; private set; }
         public int StartCount { get; private set; }
@@ -115,7 +145,7 @@ public sealed class ExternalZoomJoinFlowTests
         {
             StopCount++;
             Finalized.TrySetResult();
-            return Task.FromResult<RecordingResult?>(new RecordingResult(Target?.Path ?? "recording.mp4", TimeSpan.Zero, 1));
+            return Task.FromResult<RecordingResult?>(new RecordingResult(Target?.Path ?? "recording.mp4", TimeSpan.Zero, resultByteSize));
         }
     }
 }

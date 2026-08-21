@@ -84,6 +84,7 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
 
     private async Task FinalizeFromNativeAsync()
     {
+        await Task.Yield();
         try { await FinalizeAsync(); }
         catch { }
     }
@@ -94,7 +95,14 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
         try
         {
             var result = await recording.StopAndFinalizeIfStartedAsync(CancellationToken.None);
-            if (result is not null) RecordingCompleted?.Invoke(this, result);
+            if (result is not null && result.ByteSize > 0)
+            {
+                RecordingCompleted?.Invoke(this, result);
+            }
+            else if (result is not null)
+            {
+                DeleteEmptyTarget(result.Path);
+            }
         }
         catch (Exception exception)
         {

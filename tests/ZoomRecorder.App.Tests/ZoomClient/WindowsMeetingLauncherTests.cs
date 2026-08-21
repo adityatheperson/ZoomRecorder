@@ -8,7 +8,7 @@ public sealed class WindowsMeetingLauncherTests
     public async Task Opens_the_exact_https_uri_through_the_shell()
     {
         var shell = new FakeShell();
-        var launcher = new WindowsMeetingLauncher(shell);
+        var launcher = new WindowsMeetingLauncher(shell, new FakeInstallationLocator(true));
         var uri = new Uri("https://zoom.us/j/1234567890?pwd=a%20b");
 
         await launcher.OpenAsync(uri, CancellationToken.None);
@@ -19,7 +19,7 @@ public sealed class WindowsMeetingLauncherTests
     [Fact]
     public async Task Missing_protocol_handler_has_a_specific_error()
     {
-        var launcher = new WindowsMeetingLauncher(new FakeShell(new System.ComponentModel.Win32Exception(1155)));
+        var launcher = new WindowsMeetingLauncher(new FakeShell(new System.ComponentModel.Win32Exception(1155)), new FakeInstallationLocator(true));
 
         await Assert.ThrowsAsync<ZoomWorkplaceUnavailableException>(() =>
             launcher.OpenAsync(new Uri("https://zoom.us/j/1234567890"), CancellationToken.None));
@@ -28,7 +28,7 @@ public sealed class WindowsMeetingLauncherTests
     [Fact]
     public async Task Other_shell_failures_are_sanitized()
     {
-        var launcher = new WindowsMeetingLauncher(new FakeShell(new InvalidOperationException("secret")));
+        var launcher = new WindowsMeetingLauncher(new FakeShell(new InvalidOperationException("secret")), new FakeInstallationLocator(true));
 
         var error = await Assert.ThrowsAsync<MeetingLaunchException>(() =>
             launcher.OpenAsync(new Uri("https://zoom.us/j/1234567890"), CancellationToken.None));
@@ -41,10 +41,27 @@ public sealed class WindowsMeetingLauncherTests
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        var launcher = new WindowsMeetingLauncher(new FakeShell());
+        var launcher = new WindowsMeetingLauncher(new FakeShell(), new FakeInstallationLocator(true));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             launcher.OpenAsync(new Uri("https://zoom.us/j/1234567890"), cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Missing_zoom_installation_is_reported_before_opening_the_browser()
+    {
+        var shell = new FakeShell();
+        var launcher = new WindowsMeetingLauncher(shell, new FakeInstallationLocator(false));
+
+        await Assert.ThrowsAsync<ZoomWorkplaceUnavailableException>(() =>
+            launcher.OpenAsync(new Uri("https://zoom.us/j/1234567890"), CancellationToken.None));
+
+        Assert.Null(shell.OpenedUri);
+    }
+
+    private sealed class FakeInstallationLocator(bool installed) : IZoomInstallationLocator
+    {
+        public bool IsAvailable() => installed;
     }
 
     private sealed class FakeShell(Exception? error = null) : IWindowsShell

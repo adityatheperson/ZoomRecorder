@@ -63,6 +63,15 @@ public sealed class ZoomWindowSelectionTests
         Assert.Equal(ZoomWindowSelectionKind.None, result.Kind);
     }
 
+    [Fact]
+    public void Rejects_unknown_zoom_window_without_affirmative_meeting_evidence()
+    {
+        var result = ZoomWindowSelection.Select([
+            Window((nint)1, "Zoom", "Team Chat", 1400, 900, className: "ZPUnknownWndClass")]);
+
+        Assert.Equal(ZoomWindowSelectionKind.None, result.Kind);
+    }
+
     private static ZoomWindowDescription Window(
         nint handle,
         string processName,

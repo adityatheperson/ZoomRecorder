@@ -64,7 +64,15 @@ public static class ZoomWindowSelection
             return false;
         }
 
-        return !ExcludedClassTerms.Any(term => window.ClassName.Contains(term, StringComparison.OrdinalIgnoreCase));
+        if (ExcludedClassTerms.Any(term => window.ClassName.Contains(term, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var hasMeetingTitle = title.Contains("meeting", StringComparison.OrdinalIgnoreCase);
+        var hasMeetingClass = window.ClassName.Equals("ZPContentViewWndClass", StringComparison.OrdinalIgnoreCase) ||
+                              window.ClassName.Equals("ZPFloatVideoWndClass", StringComparison.OrdinalIgnoreCase);
+        return hasMeetingTitle || hasMeetingClass;
     }
 
     private static int Score(ZoomWindowDescription window)
