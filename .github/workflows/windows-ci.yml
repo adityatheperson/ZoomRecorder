@@ -1,0 +1,80 @@
+name: Windows CI
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    env:
+      CI: "true"
+      DOTNET_NOLOGO: "true"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore Core dependencies
+        run: dotnet restore tests/ZoomRecorder.Core.Tests/ZoomRecorder.Core.Tests.csproj
+
+      - name: Run Core tests
+        run: >-
+          dotnet test tests/ZoomRecorder.Core.Tests/ZoomRecorder.Core.Tests.csproj
+          --configuration Debug
+          --no-restore
+          --logger "trx;LogFileName=core-tests.trx"
+          --results-directory artifacts/test-results/core
+
+      - name: Build WinUI tests
+        run: >-
+          msbuild tests/ZoomRecorder.App.Tests/ZoomRecorder.App.Tests.csproj
+          /restore
+          /t:Build
+          /p:Configuration=Debug
+          /p:Platform=x64
+          /p:RuntimeIdentifier=win-x64
+          /m
+          /v:minimal
+
+      - name: Run WinUI tests
+        run: >-
+          dotnet vstest
+          tests/ZoomRecorder.App.Tests/bin/x64/Debug/net8.0-windows10.0.19041.0/win-x64/ZoomRecorder.App.Tests.dll
+          --logger:"trx;LogFileName=app-tests.trx"
+          --ResultsDirectory:artifacts/test-results/app
+
+      - name: Build Windows application
+        run: >-
+          msbuild src/ZoomRecorder.App/ZoomRecorder.App.csproj
+          /t:Build
+          /p:Configuration=Debug
+          /p:Platform=x64
+          /p:RuntimeIdentifier=win-x64
+          /m
+          /v:minimal
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-results
+          path: artifacts/test-results/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14

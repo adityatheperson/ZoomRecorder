@@ -11,7 +11,7 @@ public sealed class SqliteLibraryRepositoryTests
         new(2026, 8, 18, 12, 34, 56, 789, TimeSpan.FromHours(-7));
 
     [Fact]
-    public async Task Open_creates_schema_version_1_and_enables_foreign_keys()
+    public async Task Open_creates_schema_version_2_and_enables_foreign_keys()
     {
         using var temp = new TestDirectory();
         await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
@@ -22,15 +22,15 @@ public sealed class SqliteLibraryRepositoryTests
                 (SELECT version FROM schema_info),
                 (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'schema_info', 'classes', 'recordings', 'meeting_class_mappings',
-                    'processing_jobs', 'transcription_chunks', 'lecture_packages',
+                    'processing_jobs', 'audio_chunks', 'transcription_chunks', 'processing_transcripts', 'lecture_packages',
                     'assignments', 'class_study_guides', 'app_settings')),
                 (SELECT foreign_keys FROM pragma_foreign_keys);
             """;
 
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.Equal(1L, reader.GetInt64(0));
-        Assert.Equal(10L, reader.GetInt64(1));
+        Assert.Equal(2L, reader.GetInt64(0));
+        Assert.Equal(12L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
     }
 

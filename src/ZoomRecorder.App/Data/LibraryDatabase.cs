@@ -4,7 +4,7 @@ namespace ZoomRecorder.App.Data;
 
 public sealed class LibraryDatabase : IAsyncDisposable
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
     internal const string WindowsPathCollation = "WINDOWS_PATH";
 
     private LibraryDatabase(SqliteConnection connection)
@@ -82,11 +82,19 @@ public sealed class LibraryDatabase : IAsyncDisposable
 
         if (hasSchemaInfo)
         {
-            await VerifySchemaVersionAsync(connection, transaction, cancellationToken);
+            var version = await ReadSchemaVersionAsync(connection, transaction, cancellationToken);
+            if (version == 1)
+            {
+                await MigrateVersionOneToTwoAsync(connection, transaction, cancellationToken);
+            }
+            else if (version != CurrentSchemaVersion)
+            {
+                throw new NotSupportedException($"Library schema version {version} is not supported.");
+            }
         }
         else
         {
-            await CreateSchemaVersionOneAsync(connection, transaction, cancellationToken);
+            await CreateSchemaVersionTwoAsync(connection, transaction, cancellationToken);
         }
 
         await EnsureWindowsPathIndexAsync(connection, transaction, cancellationToken);
@@ -107,7 +115,7 @@ public sealed class LibraryDatabase : IAsyncDisposable
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task VerifySchemaVersionAsync(
+    private static async Task<int> ReadSchemaVersionAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         CancellationToken cancellationToken)
@@ -128,13 +136,10 @@ public sealed class LibraryDatabase : IAsyncDisposable
             throw new InvalidDataException("The library contains multiple schema versions.");
         }
 
-        if (version != CurrentSchemaVersion)
-        {
-            throw new NotSupportedException($"Library schema version {version} is not supported.");
-        }
+        return version;
     }
 
-    private static async Task CreateSchemaVersionOneAsync(
+    private static async Task CreateSchemaVersionTwoAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         CancellationToken cancellationToken)
@@ -146,15 +151,112 @@ public sealed class LibraryDatabase : IAsyncDisposable
             CREATE TABLE classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, term TEXT, created_at TEXT NOT NULL, is_archived INTEGER NOT NULL);
             CREATE TABLE recordings(id TEXT PRIMARY KEY, class_id TEXT NULL REFERENCES classes(id), file_path TEXT NOT NULL UNIQUE, file_name TEXT NOT NULL, meeting_id TEXT, recorded_at TEXT NOT NULL, duration_ms INTEGER NOT NULL, byte_size INTEGER NOT NULL, video_available INTEGER NOT NULL);
             CREATE TABLE meeting_class_mappings(meeting_id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id));
-            CREATE TABLE processing_jobs(id TEXT PRIMARY KEY, recording_id TEXT NOT NULL REFERENCES recordings(id), state TEXT NOT NULL, delete_video INTEGER NOT NULL, completed_chunks INTEGER NOT NULL, error_code TEXT, updated_at TEXT NOT NULL);
-            CREATE TABLE transcription_chunks(job_id TEXT NOT NULL REFERENCES processing_jobs(id), chunk_index INTEGER NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, sha256 TEXT NOT NULL, artifact_path TEXT, PRIMARY KEY(job_id, chunk_index));
-            CREATE TABLE lecture_packages(recording_id TEXT PRIMARY KEY REFERENCES recordings(id), schema_version INTEGER NOT NULL, artifact_path TEXT NOT NULL, source_transcript_hash TEXT NOT NULL, is_stale INTEGER NOT NULL, updated_at TEXT NOT NULL);
-            CREATE TABLE assignments(id TEXT PRIMARY KEY, recording_id TEXT NOT NULL REFERENCES recordings(id), description TEXT NOT NULL, due_date_text TEXT, due_at TEXT, confidence REAL NOT NULL, is_user_confirmed INTEGER NOT NULL, source_timestamp_ms INTEGER);
-            CREATE TABLE class_study_guides(class_id TEXT PRIMARY KEY REFERENCES classes(id), schema_version INTEGER NOT NULL, artifact_path TEXT NOT NULL, is_update_pending INTEGER NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE processing_jobs(
+                id TEXT PRIMARY KEY,
+                recording_id TEXT NOT NULL REFERENCES recordings(id),
+                class_id TEXT NOT NULL REFERENCES classes(id),
+                mp4_path TEXT NOT NULL,
+                job_directory TEXT NOT NULL,
+                state TEXT NOT NULL,
+                failed_stage TEXT,
+                delete_video INTEGER NOT NULL,
+                error_code TEXT,
+                transcript_committed INTEGER NOT NULL,
+                lecture_package_committed INTEGER NOT NULL,
+                assignments_committed INTEGER NOT NULL,
+                guide_outcome TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL);
+            CREATE UNIQUE INDEX processing_jobs_directory_windows_unique
+                ON processing_jobs(job_directory COLLATE WINDOWS_PATH);
+            CREATE TRIGGER processing_job_class_matches_recording
+                BEFORE INSERT ON processing_jobs
+                WHEN (SELECT class_id FROM recordings WHERE id = NEW.recording_id) IS NOT NEW.class_id
+                BEGIN
+                    SELECT RAISE(ABORT, 'processing job class does not match recording');
+                END;
+            CREATE TABLE audio_chunks(
+                job_id TEXT NOT NULL REFERENCES processing_jobs(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                start_ms INTEGER NOT NULL,
+                end_ms INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                byte_size INTEGER NOT NULL,
+                PRIMARY KEY(job_id, chunk_index));
+            CREATE TABLE transcription_chunks(
+                job_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                audio_sha256 TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL,
+                PRIMARY KEY(job_id, chunk_index),
+                FOREIGN KEY(job_id, chunk_index) REFERENCES audio_chunks(job_id, chunk_index) ON DELETE CASCADE);
+            CREATE TABLE processing_transcripts(
+                job_id TEXT PRIMARY KEY REFERENCES processing_jobs(id) ON DELETE CASCADE,
+                artifact_path TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL);
+            CREATE TABLE lecture_packages(recording_id TEXT PRIMARY KEY REFERENCES recordings(id), schema_version INTEGER NOT NULL, artifact_path TEXT NOT NULL, artifact_sha256 TEXT NOT NULL, source_transcript_hash TEXT NOT NULL, is_stale INTEGER NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE assignments(id TEXT PRIMARY KEY, recording_id TEXT NOT NULL REFERENCES recordings(id), description TEXT NOT NULL, due_date_text TEXT, due_at TEXT, confidence REAL NOT NULL, is_user_confirmed INTEGER NOT NULL, source_timestamp_ms INTEGER, source_order INTEGER NOT NULL);
+            CREATE TABLE class_study_guides(class_id TEXT PRIMARY KEY REFERENCES classes(id), schema_version INTEGER NOT NULL, artifact_path TEXT NOT NULL, artifact_sha256 TEXT NOT NULL, is_update_pending INTEGER NOT NULL, updated_at TEXT NOT NULL);
             CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             INSERT INTO schema_info(version) VALUES ($version);
             """;
         command.Parameters.AddWithValue("$version", CurrentSchemaVersion);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task MigrateVersionOneToTwoAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            ALTER TABLE processing_jobs ADD COLUMN class_id TEXT REFERENCES classes(id);
+            ALTER TABLE processing_jobs ADD COLUMN mp4_path TEXT;
+            ALTER TABLE processing_jobs ADD COLUMN job_directory TEXT;
+            ALTER TABLE processing_jobs ADD COLUMN failed_stage TEXT;
+            ALTER TABLE processing_jobs ADD COLUMN transcript_committed INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE processing_jobs ADD COLUMN lecture_package_committed INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE processing_jobs ADD COLUMN assignments_committed INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE processing_jobs ADD COLUMN guide_outcome TEXT NOT NULL DEFAULT 'NotAttempted';
+            ALTER TABLE processing_jobs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE processing_jobs ADD COLUMN created_at TEXT;
+            CREATE UNIQUE INDEX processing_jobs_directory_windows_unique
+                ON processing_jobs(job_directory COLLATE WINDOWS_PATH);
+            CREATE TRIGGER processing_job_class_matches_recording
+                BEFORE INSERT ON processing_jobs
+                WHEN NEW.class_id IS NOT NULL AND
+                     (SELECT class_id FROM recordings WHERE id = NEW.recording_id) IS NOT NEW.class_id
+                BEGIN
+                    SELECT RAISE(ABORT, 'processing job class does not match recording');
+                END;
+
+            ALTER TABLE transcription_chunks RENAME TO audio_chunks;
+            ALTER TABLE audio_chunks ADD COLUMN byte_size INTEGER;
+            CREATE TABLE transcription_chunks(
+                job_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                audio_sha256 TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL,
+                PRIMARY KEY(job_id, chunk_index),
+                FOREIGN KEY(job_id, chunk_index) REFERENCES audio_chunks(job_id, chunk_index) ON DELETE CASCADE);
+            CREATE TABLE processing_transcripts(
+                job_id TEXT PRIMARY KEY REFERENCES processing_jobs(id) ON DELETE CASCADE,
+                artifact_path TEXT NOT NULL,
+                artifact_sha256 TEXT NOT NULL);
+
+            ALTER TABLE lecture_packages ADD COLUMN artifact_sha256 TEXT NOT NULL
+                DEFAULT '0000000000000000000000000000000000000000000000000000000000000000';
+            ALTER TABLE assignments ADD COLUMN source_order INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE class_study_guides ADD COLUMN artifact_sha256 TEXT NOT NULL
+                DEFAULT '0000000000000000000000000000000000000000000000000000000000000000';
+            UPDATE schema_info SET version = 2;
+            """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }
