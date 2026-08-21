@@ -124,8 +124,8 @@ public sealed class ArtifactStore : IProcessingArtifactStore
         {
             var bytes = await File.ReadAllBytesAsync(Path.GetFullPath(checkpoint.Path), cancellationToken);
             return string.Equals(Hash(bytes), checkpoint.Sha256, StringComparison.Ordinal)
-                ? bytes
-                : null;
+                ? new ReadOnlyMemory<byte>(bytes)
+                : (ReadOnlyMemory<byte>?)null;
         }
         catch (FileNotFoundException)
         {
