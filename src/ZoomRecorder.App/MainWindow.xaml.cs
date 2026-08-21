@@ -39,10 +39,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
         AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
         _joinFlow = new NativeJoinFlow(_nativeSession);
-        _libraryInitialization = Task.FromResult<LibraryContext?>(new LibraryContext(
-            services.Database,
-            services.Repository,
-            new RecordingLibraryService(services.Repository, () => DateTimeOffset.UtcNow)));
+        _libraryInitialization = Task.FromResult<LibraryContext?>(CreateLibraryContext(services));
         _joinFlow.RecordingCompleted += (_, result) => _ = HandleRecordingCompletedAsync(result);
         _joinFlow.FinalizationFailed += (_, message) => DispatcherQueue.TryEnqueue(() =>
         {
@@ -308,9 +305,14 @@ public sealed partial class MainWindow : Window, IAppNavigator
         if (await _libraryInitialization is null)
         {
             _shellViewModel = null;
-            _libraryInitialization = InitializeLibraryAsync();
+            _libraryInitialization = Task.FromResult<LibraryContext?>(CreateLibraryContext(_services));
         }
     }
+
+    private static LibraryContext CreateLibraryContext(AppServices services) => new(
+        services.Database,
+        services.Repository,
+        new RecordingLibraryService(services.Repository, () => DateTimeOffset.UtcNow));
 
     private async Task HandleRecordingCompletedAsync(RecordingResult result)
     {
