@@ -66,6 +66,22 @@ public sealed class ProcessingViewModelTests
         Assert.Equal("1.2 KB", vm.EstimatedUploadText);
     }
 
+    [Fact]
+    public async Task Recycle_unavailable_requires_separate_confirmation_before_permanent_delete()
+    {
+        var notice = new NoticePresenter(false);
+        var deletes = 0;
+        var vm = new ProcessingViewModel(
+            "Physics", null, false, notice, (_, _) => Task.CompletedTask, _ => Task.CompletedTask,
+            permanentDelete: _ => { deletes++; return Task.CompletedTask; });
+
+        vm.ApplyRecycleUnavailable();
+        await vm.ConfirmPermanentDeleteAsync(default);
+
+        Assert.True(vm.PermanentDeleteDecisionPending);
+        Assert.Equal(0, deletes);
+    }
+
     private sealed class NoticePresenter(bool accepted) : ICloudNoticePresenter
     {
         public string Message { get; private set; } = string.Empty;

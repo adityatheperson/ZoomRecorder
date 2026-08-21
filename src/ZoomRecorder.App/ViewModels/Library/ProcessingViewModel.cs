@@ -12,6 +12,7 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     private readonly ICloudNoticePresenter notice;
     private readonly Func<bool, CancellationToken, Task> start;
     private readonly Func<CancellationToken, Task> cancel;
+    private readonly Func<CancellationToken, Task>? permanentDelete;
     private bool deleteVideoAfterSuccess;
     private bool isProcessing;
     private string statusText = "Ready to process";
@@ -23,7 +24,8 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         ICloudNoticePresenter notice,
         Func<bool, CancellationToken, Task> start,
         Func<CancellationToken, Task> cancel,
-        decimal? estimatedCost = null)
+        decimal? estimatedCost = null,
+        Func<CancellationToken, Task>? permanentDelete = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(className);
         ClassName = className;
@@ -33,6 +35,7 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         this.notice = notice ?? throw new ArgumentNullException(nameof(notice));
         this.start = start ?? throw new ArgumentNullException(nameof(start));
         this.cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
+        this.permanentDelete = permanentDelete;
     }
 
     public string ClassName { get; }
@@ -46,6 +49,7 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     }
     public bool IsProcessing => isProcessing;
     public string StatusText => statusText;
+    public bool PermanentDeleteDecisionPending { get; private set; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -65,6 +69,23 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     }
 
     public Task CancelAsync(CancellationToken cancellationToken) => cancel(cancellationToken);
+
+    public void ApplyRecycleUnavailable()
+    {
+        PermanentDeleteDecisionPending = true;
+        RaisePropertyChanged(nameof(PermanentDeleteDecisionPending));
+    }
+
+    public async Task ConfirmPermanentDeleteAsync(CancellationToken cancellationToken)
+    {
+        if (!PermanentDeleteDecisionPending || permanentDelete is null) return;
+        if (!await notice.ConfirmAsync(
+            "The Recycle Bin is unavailable. Permanently delete the MP4? This cannot be undone.",
+            cancellationToken)) return;
+        await permanentDelete(cancellationToken);
+        PermanentDeleteDecisionPending = false;
+        RaisePropertyChanged(nameof(PermanentDeleteDecisionPending));
+    }
 
     public void Apply(ProcessingProgress progress)
     {

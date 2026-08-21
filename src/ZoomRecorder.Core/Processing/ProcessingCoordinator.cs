@@ -10,6 +10,8 @@ public sealed class ProcessingCoordinator
     private readonly IStudyGenerationClient studyGeneration;
     private readonly IProcessingArtifactStore artifacts;
     private readonly long maxChunkBytes;
+    private readonly IVideoRecycler? videoRecycler;
+    private readonly IVideoDeletionStore? videoDeletionStore;
     private readonly object activeGate = new();
     private readonly Dictionary<Guid, ActiveOperation> active = [];
 
@@ -19,7 +21,9 @@ public sealed class ProcessingCoordinator
         ITranscriptionClient transcription,
         IStudyGenerationClient studyGeneration,
         IProcessingArtifactStore artifacts,
-        long maxChunkBytes)
+        long maxChunkBytes,
+        IVideoRecycler? videoRecycler = null,
+        IVideoDeletionStore? videoDeletionStore = null)
     {
         this.jobs = jobs ?? throw new ArgumentNullException(nameof(jobs));
         this.audio = audio ?? throw new ArgumentNullException(nameof(audio));
@@ -32,9 +36,12 @@ public sealed class ProcessingCoordinator
         }
 
         this.maxChunkBytes = maxChunkBytes;
+        this.videoRecycler = videoRecycler;
+        this.videoDeletionStore = videoDeletionStore;
     }
 
     public event EventHandler<ProcessingProgress>? ProgressChanged;
+    public event EventHandler<Guid>? VideoRecycleUnavailable;
 
     public async Task StartAsync(ProcessingRequest request, CancellationToken cancellationToken)
     {
@@ -225,6 +232,7 @@ public sealed class ProcessingCoordinator
             {
                 job = await UpdateGuideAsync(job, cancellationToken);
                 await PublishAsync(job, cancellationToken);
+                await HandleVideoDeletionAsync(job, cancellationToken);
             }
         }
         catch (ProcessingConcurrencyException)
@@ -247,6 +255,31 @@ public sealed class ProcessingCoordinator
 
             throw;
         }
+    }
+
+    private async Task HandleVideoDeletionAsync(ProcessingJobSnapshot job, CancellationToken cancellationToken)
+    {
+        if (!job.Request.DeleteVideoAfterSuccess || videoRecycler is null || videoDeletionStore is null ||
+            !DeletionEligibility.Evaluate(job).CanDelete)
+        {
+            return;
+        }
+
+        if (job.TranscriptArtifact is not { } transcript || job.LecturePackageArtifact is not { } package ||
+            await artifacts.ReadVerifiedAsync(transcript, cancellationToken) is null ||
+            await artifacts.ReadVerifiedAsync(package, cancellationToken) is null)
+        {
+            throw new ProcessingOperationException(CloudProcessingErrorCode.StorageCommitFailed);
+        }
+
+        var result = await videoRecycler.RecycleAsync(job.Request.Mp4Path, cancellationToken);
+        if (!result.Recycled)
+        {
+            VideoRecycleUnavailable?.Invoke(this, job.Request.RecordingId);
+            return;
+        }
+
+        await videoDeletionStore.MarkVideoUnavailableAsync(job.Request.RecordingId, cancellationToken);
     }
 
     private async Task<ProcessingJobSnapshot> PrepareAudioAsync(

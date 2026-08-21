@@ -5,7 +5,7 @@ using ZoomRecorder.Core.Processing;
 
 namespace ZoomRecorder.App.Data;
 
-public sealed class SqliteLibraryRepository : ILibraryRepository, IStudyMaterialStore
+public sealed class SqliteLibraryRepository : ILibraryRepository, IStudyMaterialStore, IVideoDeletionStore
 {
     private const string RecordingColumns =
         "id, class_id, file_path, file_name, meeting_id, recorded_at, duration_ms, byte_size, video_available";
@@ -469,6 +469,18 @@ public sealed class SqliteLibraryRepository : ILibraryRepository, IStudyMaterial
     public Task MarkGuideRebuildRequestedAsync(Guid classId, CancellationToken cancellationToken) =>
         WithConnectionAsync(connection => UpsertGuidePendingAsync(
             connection, transaction: null, classId, _utcNow(), cancellationToken), cancellationToken);
+
+    public Task MarkVideoUnavailableAsync(Guid recordingId, CancellationToken cancellationToken) =>
+        WithConnectionAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE recordings SET video_available = 0 WHERE id = $recordingId;";
+            command.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                throw new KeyNotFoundException("The recording does not exist.");
+            }
+        }, cancellationToken);
 
     private static async Task UpsertGuidePendingAsync(
         SqliteConnection connection,

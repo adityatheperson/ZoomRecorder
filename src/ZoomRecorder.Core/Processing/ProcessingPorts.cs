@@ -46,3 +46,8 @@ public interface IVideoRecycler
 {
     Task<RecycleResult> RecycleAsync(string path, CancellationToken cancellationToken);
 }
+
+public interface IVideoDeletionStore
+{
+    Task MarkVideoUnavailableAsync(Guid recordingId, CancellationToken cancellationToken);
+}
