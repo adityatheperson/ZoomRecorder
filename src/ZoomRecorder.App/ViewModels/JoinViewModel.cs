@@ -66,7 +66,7 @@ public sealed class JoinViewModel(IJoinFlow joinFlow, IAppNavigator navigator) :
 
         try
         {
-            var request = MeetingInputParser.Parse(MeetingInput, Passcode, DisplayName);
+            var request = MeetingInputParser.Parse(MeetingInput, Passcode);
             await joinFlow.JoinAndRecordAsync(request, cancellationToken).ConfigureAwait(true);
             navigator.ShowMeeting();
         }

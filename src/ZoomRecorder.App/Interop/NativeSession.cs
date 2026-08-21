@@ -26,7 +26,7 @@ internal sealed class NativeSession : IDisposable
         if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
             throw new InvalidOperationException("Zoom Meeting SDK credentials are not configured.");
         var jwt = MeetingSdkJwtFactory.Create(clientId, clientSecret, DateTimeOffset.UtcNow);
-        var payload = JsonSerializer.Serialize(new { request.MeetingId, request.Passcode, request.DisplayName, Jwt = jwt });
+        var payload = JsonSerializer.Serialize(new { request.MeetingId, request.Passcode, Jwt = jwt });
         lastNativeError = null;
         ThrowIfFailed(NativeMethods.zr_prepare_meeting(handle.DangerousGetHandle(), payload), "prepare Zoom meeting");
     }

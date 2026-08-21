@@ -9,7 +9,6 @@ public static class PrivacySafeLogger
     {
         Event = "meeting_join_requested",
         MeetingIdSuffix = request.MeetingId.Length > 4 ? request.MeetingId[^4..] : "redacted",
-        HasPasscode = !string.IsNullOrEmpty(request.Passcode),
-        DisplayName = "redacted"
+        HasPasscode = !string.IsNullOrEmpty(request.Passcode)
     });
 }
