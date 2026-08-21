@@ -6,13 +6,17 @@
         <Border Width="520" Padding="36" CornerRadius="16" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
             <StackPanel Spacing="16">
                 <TextBlock Text="Join and record" Style="{ThemeResource TitleTextBlockStyle}" />
-                <TextBlock Text="Join as a guest. Recording starts automatically before the meeting opens." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="Zoom Workplace opens the meeting. Recording starts automatically when the meeting window appears." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <TextBox Header="Zoom link or meeting ID" Text="{Binding MeetingInput, Mode=TwoWay}" PlaceholderText="https://zoom.us/j/…" />
                 <PasswordBox Header="Passcode (when required)" PasswordChanged="PasscodeChanged" />
-                <TextBox Header="Display name" Text="{Binding DisplayName, Mode=TwoWay}" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <ProgressRing IsActive="{Binding IsJoining}" Width="20" Height="20" />
+                    <TextBlock Text="{Binding JoinStatusText}" VerticalAlignment="Center" />
+                </StackPanel>
                 <TextBlock Text="{Binding ErrorMessage}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
                 <TextBlock Text="By joining, you confirm that you will provide any recording notice or consent required by Zoom policy and applicable law." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Button Content="Join and record" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Style="{ThemeResource AccentButtonStyle}" Click="JoinClicked" />
+                <Button Content="Join and record" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Style="{ThemeResource AccentButtonStyle}" Click="JoinClicked" IsEnabled="{Binding CanJoin}" />
+                <Button x:Name="CancelButton" Content="Cancel" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="CancelClicked" Visibility="Collapsed" />
             </StackPanel>
         </Border>
     </Grid>

@@ -18,9 +18,10 @@ public sealed class JoinViewModel(IJoinFlow joinFlow, IAppNavigator navigator) :
 {
     private string _meetingInput = string.Empty;
     private string? _passcode;
-    private string _displayName = string.Empty;
     private string? _errorMessage;
+    private string? _joinStatusText;
     private bool _isJoining;
+    private CancellationTokenSource? _joinCancellation;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -36,12 +37,6 @@ public sealed class JoinViewModel(IJoinFlow joinFlow, IAppNavigator navigator) :
         set => Set(ref _passcode, value);
     }
 
-    public string DisplayName
-    {
-        get => _displayName;
-        set => Set(ref _displayName, value);
-    }
-
     public string? ErrorMessage
     {
         get => _errorMessage;
@@ -51,7 +46,23 @@ public sealed class JoinViewModel(IJoinFlow joinFlow, IAppNavigator navigator) :
     public bool IsJoining
     {
         get => _isJoining;
-        private set => Set(ref _isJoining, value);
+        private set
+        {
+            if (Set(ref _isJoining, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanCancel)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanJoin)));
+            }
+        }
+    }
+
+    public bool CanCancel => IsJoining;
+    public bool CanJoin => !IsJoining;
+
+    public string? JoinStatusText
+    {
+        get => _joinStatusText;
+        private set => Set(ref _joinStatusText, value);
     }
 
     public async Task JoinAndRecordAsync(CancellationToken cancellationToken = default)
@@ -63,12 +74,21 @@ public sealed class JoinViewModel(IJoinFlow joinFlow, IAppNavigator navigator) :
 
         IsJoining = true;
         ErrorMessage = null;
+        JoinStatusText = "Waiting for Zoom meeting…";
+        using var attemptCancellation = new CancellationTokenSource();
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            attemptCancellation.Token);
+        _joinCancellation = attemptCancellation;
 
         try
         {
             var request = MeetingInputParser.Parse(MeetingInput, Passcode);
-            await joinFlow.JoinAndRecordAsync(request, cancellationToken).ConfigureAwait(true);
+            await joinFlow.JoinAndRecordAsync(request, linkedCancellation.Token).ConfigureAwait(true);
             navigator.ShowMeeting();
+        }
+        catch (OperationCanceledException) when (attemptCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (exception is MeetingInputException or InvalidOperationException)
         {
@@ -76,18 +96,23 @@ public sealed class JoinViewModel(IJoinFlow joinFlow, IAppNavigator navigator) :
         }
         finally
         {
+            _joinCancellation = null;
+            JoinStatusText = null;
             IsJoining = false;
         }
     }
 
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    public void CancelJoin() => _joinCancellation?.Cancel();
+
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))
         {
-            return;
+            return false;
         }
 
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        return true;
     }
 }
