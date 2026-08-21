@@ -5,7 +5,7 @@ namespace ZoomRecorder.Core.Tests.Lifecycle;
 
 public sealed class MeetingLifecycleTests
 {
-    private static readonly MeetingJoinRequest Request = new("1234567890", null, "Aditya");
+    private static readonly MeetingJoinRequest Request = new("1234567890", null);
 
     [Fact]
     public void Happy_path_reaches_recording_complete()

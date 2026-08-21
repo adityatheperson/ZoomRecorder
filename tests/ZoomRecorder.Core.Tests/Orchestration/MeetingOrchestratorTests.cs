@@ -7,7 +7,7 @@ namespace ZoomRecorder.Core.Tests.Orchestration;
 
 public sealed class MeetingOrchestratorTests
 {
-    private static readonly MeetingJoinRequest Request = new("1234567890", null, "Aditya");
+    private static readonly MeetingJoinRequest Request = new("1234567890", null);
 
     [Fact]
     public async Task Join_starts_recording_before_entering_meeting()

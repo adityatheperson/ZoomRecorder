@@ -4,13 +4,8 @@ namespace ZoomRecorder.Core.Meetings;
 
 public static partial class MeetingInputParser
 {
-    public static MeetingJoinRequest Parse(string input, string? passcode, string displayName)
+    public static MeetingJoinRequest Parse(string input, string? passcode)
     {
-        if (string.IsNullOrWhiteSpace(displayName))
-        {
-            throw new MeetingInputException("Enter a display name.");
-        }
-
         if (string.IsNullOrWhiteSpace(input))
         {
             throw new MeetingInputException("Enter a Zoom link or meeting ID.");
@@ -27,7 +22,7 @@ public static partial class MeetingInputParser
         }
 
         var chosenPasscode = string.IsNullOrWhiteSpace(passcode) ? embeddedPasscode : passcode.Trim();
-        return new MeetingJoinRequest(meetingId, chosenPasscode, displayName.Trim());
+        return new MeetingJoinRequest(meetingId, chosenPasscode);
     }
 
     private static bool TryParseZoomUri(string input, out Uri? uri)
