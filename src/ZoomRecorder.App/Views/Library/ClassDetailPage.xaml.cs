@@ -9,13 +9,15 @@ public sealed partial class ClassDetailPage : Page
     private readonly ClassDetailViewModel _viewModel;
     private readonly Action _back;
     private readonly Action _recordClass;
+    private readonly Action<RecordingListItem> _openLecture;
 
-    public ClassDetailPage(ClassDetailViewModel viewModel, Action back, Action recordClass)
+    public ClassDetailPage(ClassDetailViewModel viewModel, Action back, Action recordClass, Action<RecordingListItem> openLecture)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _back = back ?? throw new ArgumentNullException(nameof(back));
         _recordClass = recordClass ?? throw new ArgumentNullException(nameof(recordClass));
+        _openLecture = openLecture ?? throw new ArgumentNullException(nameof(openLecture));
         DataContext = viewModel;
         UpdateLectureState();
     }
@@ -42,4 +44,8 @@ public sealed partial class ClassDetailPage : Page
     private void BackClicked(object sender, RoutedEventArgs args) => _back();
     private void RecordClassClicked(object sender, RoutedEventArgs args) => _recordClass();
     private void OpenStudyGuideClicked(object sender, RoutedEventArgs args) => DetailsTabs.SelectedIndex = 1;
+    private void LectureClicked(object sender, ItemClickEventArgs args)
+    {
+        if (args.ClickedItem is RecordingListItem lecture) _openLecture(lecture);
+    }
 }

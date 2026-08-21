@@ -19,7 +19,10 @@ public sealed class AppServices : IAsyncDisposable
         SqliteLibraryRepository repository,
         ProcessingCoordinator coordinator,
         ICredentialVault credentialVault,
-        IAppSettingsStore settings)
+        IAppSettingsStore settings,
+        IProcessingArtifactStore artifacts,
+        StudyMaterialMergeService studyMaterials,
+        LibraryPaths paths)
     {
         this.database = database;
         this.httpClient = httpClient;
@@ -27,12 +30,18 @@ public sealed class AppServices : IAsyncDisposable
         Coordinator = coordinator;
         CredentialVault = credentialVault;
         Settings = settings;
+        Artifacts = artifacts;
+        StudyMaterials = studyMaterials;
+        Paths = paths;
     }
 
     public SqliteLibraryRepository Repository { get; }
     public ProcessingCoordinator Coordinator { get; }
     public ICredentialVault CredentialVault { get; }
     public IAppSettingsStore Settings { get; }
+    public IProcessingArtifactStore Artifacts { get; }
+    public StudyMaterialMergeService StudyMaterials { get; }
+    public LibraryPaths Paths { get; }
     public LibraryDatabase Database => database;
 
     public static async Task<AppServices> CreateAsync(
@@ -61,7 +70,16 @@ public sealed class AppServices : IAsyncDisposable
                 new WindowsVideoRecycler(),
                 repository);
             await coordinator.RecoverAsync(cancellationToken);
-            return new AppServices(database, http, repository, coordinator, vault, new SqliteAppSettingsStore(database));
+            return new AppServices(
+                database,
+                http,
+                repository,
+                coordinator,
+                vault,
+                new SqliteAppSettingsStore(database),
+                artifacts,
+                new StudyMaterialMergeService(repository, new OpenAiStudyGenerationClient(api), artifacts),
+                paths);
         }
         catch
         {

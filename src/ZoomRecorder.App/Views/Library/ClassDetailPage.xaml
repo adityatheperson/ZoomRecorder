@@ -45,7 +45,8 @@
                         <TextBlock Text="No lectures in this class yet." Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Center" Click="RecordClassClicked" />
                     </StackPanel>
-                    <ListView x:Name="LecturesList" ItemsSource="{Binding Lectures}" SelectionMode="None">
+                    <ListView x:Name="LecturesList" ItemsSource="{Binding Lectures}" SelectionMode="None"
+                              IsItemClickEnabled="True" ItemClick="LectureClicked">
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="libraryVm:RecordingListItem">
                                 <Grid Padding="12,10" ColumnSpacing="12">

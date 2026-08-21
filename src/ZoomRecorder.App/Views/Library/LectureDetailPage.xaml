@@ -5,10 +5,11 @@
     <Grid Padding="36" MaxWidth="1100" HorizontalAlignment="Center">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
         <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <Button Content="Back" Click="BackClicked" />
             <TextBlock Grid.Column="1" Text="{Binding Title}" Style="{ThemeResource TitleTextBlockStyle}" VerticalAlignment="Center" />
-            <Button Grid.Column="2" Content="Refresh study materials" IsEnabled="{Binding CanRefreshStudyMaterials}" Click="RefreshClicked" />
+            <Button Grid.Column="2" Content="Create study materials" Style="{ThemeResource AccentButtonStyle}" Click="ProcessClicked" />
+            <Button Grid.Column="3" Content="Refresh study materials" IsEnabled="{Binding CanRefreshStudyMaterials}" Click="RefreshClicked" />
         </Grid>
         <TabView Grid.Row="1" Margin="0,18,0,0" IsAddTabButtonVisible="False">
             <TabViewItem Header="Summary"><TextBox Text="{Binding Summary, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" Padding="16" /></TabViewItem>

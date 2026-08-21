@@ -13,6 +13,8 @@ using ZoomRecorder.App.Views.Library;
 using ZoomRecorder.Core.Library;
 using ZoomRecorder.Core.Meetings;
 using ZoomRecorder.Core.Ports;
+using ZoomRecorder.Core.Processing;
+using System.Text.Json;
 
 namespace ZoomRecorder.App;
 
@@ -229,7 +231,100 @@ public sealed partial class MainWindow : Window, IAppNavigator
         await viewModel.LoadAsync(CancellationToken.None);
         if (request == _navigationRequest)
         {
-            RootFrame.Content = new ClassDetailPage(viewModel, NavigateClasses, ShowJoin);
+            RootFrame.Content = new ClassDetailPage(viewModel, NavigateClasses, ShowJoin, OpenLecture);
+        }
+    }
+
+    private void OpenLecture(RecordingListItem item)
+    {
+        var request = ++_navigationRequest;
+        _classDetailActive = true;
+        NavigationRoot.IsBackEnabled = true;
+        _ = LoadLectureAsync(request, item.Recording);
+    }
+
+    private async Task LoadLectureAsync(int request, RecordingRecord recording)
+    {
+        var notice = new WindowCloudNoticePresenter(RootFrame);
+        var viewModel = new LectureDetailViewModel(
+            recording,
+            (text, token) => SaveEditedTranscriptAsync(recording, text, token),
+            token => _services.StudyMaterials.RefreshAsync(recording.Id, token),
+            notice);
+        try
+        {
+            var checkpoint = await _services.Repository.GetTranscriptAsync(recording.Id, CancellationToken.None);
+            var bytes = await _services.Artifacts.ReadVerifiedAsync(checkpoint, CancellationToken.None);
+            var transcript = bytes is null ? null : JsonSerializer.Deserialize<Transcript>(bytes.Value.Span);
+            viewModel.TranscriptText = transcript?.Text ?? string.Empty;
+        }
+        catch (KeyNotFoundException)
+        {
+            viewModel.TranscriptText = string.Empty;
+        }
+
+        if (request == _navigationRequest)
+        {
+            RootFrame.Content = new LectureDetailPage(
+                viewModel,
+                () => NavigateClassById(recording.ClassId!.Value),
+                () => ShowProcessingAsync(recording, notice));
+        }
+    }
+
+    private void NavigateClassById(Guid classId)
+    {
+        var request = BeginLibraryNavigation(LibraryDestination.Classes, ClassesNavigationItem);
+        _classDetailActive = true;
+        NavigationRoot.IsBackEnabled = true;
+        _ = LoadClassDetailAsync(request, classId);
+    }
+
+    private async Task SaveEditedTranscriptAsync(RecordingRecord recording, string text, CancellationToken token)
+    {
+        var transcript = new Transcript([new TranscriptSegment(0, Math.Max(1, (long)recording.Duration.TotalMilliseconds), text)]);
+        var artifact = await _services.Artifacts.WriteRecordingArtifactAsync(
+            recording.Id, $"transcript-edited-{Guid.NewGuid():D}.json",
+            JsonSerializer.SerializeToUtf8Bytes(transcript), token);
+        await _services.StudyMaterials.SaveEditedTranscriptAsync(recording.Id, artifact, token);
+    }
+
+    private async Task ShowProcessingAsync(RecordingRecord recording, ICloudNoticePresenter notice)
+    {
+        if (recording.ClassId is not { } classId) return;
+        var jobId = Guid.NewGuid();
+        var jobDirectory = Path.Combine(_services.Paths.JobsRoot, jobId.ToString("D"));
+        var deleteDefault = await _services.Settings.GetDeleteVideoDefaultAsync(CancellationToken.None);
+        ProcessingViewModel viewModel = null!;
+        viewModel = new ProcessingViewModel(
+            "Selected class", recording.ByteSize, deleteDefault, notice,
+            (deleteVideo, token) => _services.Coordinator.StartAsync(new ProcessingRequest(
+                jobId, recording.Id, classId, recording.FilePath, jobDirectory, deleteVideo), token),
+            token => _services.Coordinator.CancelAsync(jobId, token),
+            permanentDelete: async token =>
+            {
+                token.ThrowIfCancellationRequested();
+                File.Delete(Path.GetFullPath(recording.FilePath));
+                await _services.Repository.MarkVideoUnavailableAsync(recording.Id, token);
+            });
+        EventHandler<ProcessingProgress> progress = (_, update) =>
+        {
+            if (update.JobId == jobId) DispatcherQueue.TryEnqueue(() => viewModel.Apply(update));
+        };
+        EventHandler<Guid> recycle = (_, recordingId) =>
+        {
+            if (recordingId == recording.Id) DispatcherQueue.TryEnqueue(viewModel.ApplyRecycleUnavailable);
+        };
+        _services.Coordinator.ProgressChanged += progress;
+        _services.Coordinator.VideoRecycleUnavailable += recycle;
+        try
+        {
+            await new ProcessingDialog(viewModel) { XamlRoot = RootFrame.XamlRoot }.ShowAsync();
+        }
+        finally
+        {
+            _services.Coordinator.ProgressChanged -= progress;
+            _services.Coordinator.VideoRecycleUnavailable -= recycle;
         }
     }
 
@@ -407,4 +502,22 @@ public sealed partial class MainWindow : Window, IAppNavigator
         LibraryDatabase Database,
         ILibraryRepository Repository,
         RecordingLibraryService Registration);
+
+    private sealed class WindowCloudNoticePresenter(Frame frame) : ICloudNoticePresenter
+    {
+        public async Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var dialog = new ContentDialog
+            {
+                XamlRoot = frame.XamlRoot,
+                Title = "Cloud processing",
+                Content = message,
+                PrimaryButtonText = "Continue",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary
+            };
+            return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        }
+    }
 }
