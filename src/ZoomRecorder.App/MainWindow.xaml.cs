@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using WinRT.Interop;
 using ZoomRecorder.App.Data;
+using ZoomRecorder.App.Composition;
 using ZoomRecorder.App.Interop;
 using ZoomRecorder.App.Services;
 using ZoomRecorder.App.ViewModels;
@@ -28,14 +29,20 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private const string LibraryUnavailableMessage =
         "Your recording was saved, but the class library is unavailable right now.";
 
-    public MainWindow()
+    private readonly AppServices _services;
+
+    public MainWindow(AppServices services)
     {
         InitializeComponent();
+        _services = services ?? throw new ArgumentNullException(nameof(services));
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
         _joinFlow = new NativeJoinFlow(_nativeSession);
-        _libraryInitialization = InitializeLibraryAsync();
+        _libraryInitialization = Task.FromResult<LibraryContext?>(new LibraryContext(
+            services.Database,
+            services.Repository,
+            new RecordingLibraryService(services.Repository, () => DateTimeOffset.UtcNow)));
         _joinFlow.RecordingCompleted += (_, result) => _ = HandleRecordingCompletedAsync(result);
         _joinFlow.FinalizationFailed += (_, message) => DispatcherQueue.TryEnqueue(() =>
         {
@@ -232,20 +239,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void NavigateSettings()
     {
         BeginLibraryNavigation(LibraryDestination.Settings, navigationItem: null);
-        var panel = new StackPanel
-        {
-            Width = 560,
-            Spacing = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        panel.Children.Add(new TextBlock { Text = "Settings", FontSize = 32, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Cloud processing settings are coming in the processing phase. Recording and the local class library work without them.",
-            TextWrapping = TextWrapping.Wrap
-        });
-        RootFrame.Content = new Page { Content = panel };
+        RootFrame.Content = new SettingsPage(new SettingsViewModel(_services.CredentialVault, _services.Settings));
     }
 
     private void ShowJoin()
@@ -405,34 +399,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
         return dialog.AssignedClass is not null;
     }
 
-    private static async Task<LibraryContext?> InitializeLibraryAsync()
-    {
-        try
-        {
-            var database = await LibraryDatabase.OpenAsync(
-                LibraryPaths.CreateDefault().DatabasePath,
-                CancellationToken.None);
-            var repository = new SqliteLibraryRepository(database);
-            return new LibraryContext(
-                database,
-                repository,
-                new RecordingLibraryService(repository, () => DateTimeOffset.UtcNow));
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private async void OnClosed(object sender, WindowEventArgs args)
-    {
-        _nativeSession.Dispose();
-        var library = await _libraryInitialization;
-        if (library is not null)
-        {
-            await library.Database.DisposeAsync();
-        }
-    }
+    private void OnClosed(object sender, WindowEventArgs args) => _nativeSession.Dispose();
 
     private sealed record LibraryContext(
         LibraryDatabase Database,

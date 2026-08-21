@@ -70,6 +70,25 @@ jobs:
           /m
           /v:minimal
 
+      - name: Configure native Release tests
+        run: cmake -S src/ZoomRecorder.Native -B artifacts/native-release -A x64
+
+      - name: Build native Release tests
+        run: cmake --build artifacts/native-release --config Release
+
+      - name: Run native Release tests
+        run: ctest --test-dir artifacts/native-release -C Release --output-on-failure
+
+      - name: Build Windows application (Release)
+        run: >-
+          msbuild src/ZoomRecorder.App/ZoomRecorder.App.csproj
+          /t:Build
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:RuntimeIdentifier=win-x64
+          /m
+          /v:minimal
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
