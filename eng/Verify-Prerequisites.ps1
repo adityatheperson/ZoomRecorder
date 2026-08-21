@@ -14,10 +14,13 @@ foreach ($command in $requiredCommands) {
 }
 
 if (-not $PortableOnly) {
-    $zoomSdkDirectory = [Environment]::GetEnvironmentVariable('ZOOM_MEETING_SDK_DIR')
-    if ([string]::IsNullOrWhiteSpace($zoomSdkDirectory) -or
-        -not (Test-Path -LiteralPath $zoomSdkDirectory -PathType Container)) {
-        $missing.Add('ZOOM_MEETING_SDK_DIR')
+    $zoomCandidates = @(
+        (Join-Path $env:APPDATA 'Zoom\bin\Zoom.exe'),
+        (Join-Path $env:ProgramFiles 'Zoom\bin\Zoom.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Zoom\bin\Zoom.exe')
+    )
+    if (-not ($zoomCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
+        $missing.Add('Zoom Workplace')
     }
 }
 

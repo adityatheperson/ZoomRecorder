@@ -2,9 +2,9 @@
 
 ## Build under verification
 
-- Application version: 0.2.0 development branch
+- Application version: 0.3.0 private Zoom Workplace capture
 - Windows CI: GitHub `windows-latest`, x64
-- Zoom Meeting SDK: supplied locally at release packaging time; `sdk.dll` is required
+- Meeting client: installed Zoom Workplace; the Meeting SDK and its credentials are not used or packaged
 - Transcription model: `gpt-transcribe`
 - Study generation model: `gpt-5.6-luna`
 - Credential storage: Windows Credential Manager (`ZoomRecorder/OpenAI`)
@@ -20,7 +20,7 @@
 | WinUI view-model, SQLite, cloud adapter, credential, recycler, and workflow tests | Automated in Windows CI |
 | Debug x64 WinUI/XAML build | Automated in Windows CI |
 | Native exporter CTest | Required by release verification pipeline |
-| Release contains SQLite, native audio preparation, Zoom SDK, and no obvious API key | `eng/Verify-Release.ps1` |
+| Release contains SQLite and native audio preparation, rejects Meeting SDK payloads, and contains no obvious API key | `eng/Verify-Release.ps1` |
 | Unrelated repository `work/` directory excluded | `eng/Verify-Release.ps1` |
 
 Generated artifacts are stored under the configured class artifact root using recording/class GUID directories. Job-only chunks remain under the registered job directory and recovery cleans only registered job artifacts.

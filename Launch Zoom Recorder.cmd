@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "APP_DIR=%~dp0outputs\ZoomRecorder-0.2.0"
+set "APP_DIR=%~dp0outputs\ZoomRecorder-0.3.0"
 
 if not exist "%APP_DIR%\ZoomRecorder.App.exe" (
   echo Zoom Recorder could not be found at:
