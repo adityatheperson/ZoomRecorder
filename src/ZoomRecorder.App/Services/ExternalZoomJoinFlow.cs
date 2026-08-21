@@ -82,12 +82,11 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
 
     public Task StopAndSaveAsync() => FinalizeAsync();
 
-    private async Task FinalizeFromNativeAsync()
+    private Task FinalizeFromNativeAsync() => Task.Run(async () =>
     {
-        await Task.Yield();
-        try { await FinalizeAsync(); }
+        try { await FinalizeAsync().ConfigureAwait(false); }
         catch { }
-    }
+    });
 
     private async Task FinalizeAsync()
     {
