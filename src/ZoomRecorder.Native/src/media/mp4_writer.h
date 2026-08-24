@@ -19,6 +19,8 @@ class Mp4Writer {
   bool is_open() const;
   long last_error() const;
   ID3D11Device* device() const;
+  unsigned video_width() const;
+  unsigned video_height() const;
   const std::wstring& final_path() const;
  private:
   std::unique_ptr<Mp4WriterImpl> impl_;

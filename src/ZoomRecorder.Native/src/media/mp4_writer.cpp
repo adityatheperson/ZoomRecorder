@@ -18,6 +18,7 @@ class Mp4WriterImpl {
   bool open(const std::wstring& final_path, unsigned width, unsigned height, unsigned frame_rate) {
     if (writer_ || final_path.empty() || width == 0 || height == 0 || frame_rate == 0) return false;
     final_path_ = final_path; partial_path_ = final_path + L".partial.mp4"; frame_duration_ = 10'000'000LL / frame_rate;
+    video_width_ = width; video_height_ = height;
     if (FAILED(MFStartup(MF_VERSION))) return false;
     mf_started_ = true;
     if (!ensure_device()) return false;
@@ -96,6 +97,8 @@ class Mp4WriterImpl {
   bool is_open() const { return writer_ != nullptr && !finalized_; }
   long last_error() const { return last_error_; }
   ID3D11Device* device() { return ensure_device() ? device_.Get() : nullptr; }
+  unsigned video_width() const { return video_width_; }
+  unsigned video_height() const { return video_height_; }
   const std::wstring& final_path() const { return final_path_; }
 
  private:
@@ -113,6 +116,7 @@ class Mp4WriterImpl {
   UINT device_reset_token_{}; DWORD video_stream_{}, audio_stream_{}; std::int64_t frame_duration_{};
   std::int64_t first_video_{-1}; AudioSampleTimeline audio_timeline_{48000, 2}; long last_error_{}; bool video_started_{}, mf_started_{}, finalized_{}, final_result_{};
   std::wstring final_path_, partial_path_;
+  unsigned video_width_{}, video_height_{};
 };
 
 Mp4Writer::Mp4Writer() : impl_(std::make_unique<Mp4WriterImpl>()) {}
@@ -124,4 +128,6 @@ bool Mp4Writer::finalize() { return impl_->finalize(); }
 bool Mp4Writer::is_open() const { return impl_->is_open(); }
 long Mp4Writer::last_error() const { return impl_->last_error(); }
 ID3D11Device* Mp4Writer::device() const { return impl_->device(); }
+unsigned Mp4Writer::video_width() const { return impl_->video_width(); }
+unsigned Mp4Writer::video_height() const { return impl_->video_height(); }
 const std::wstring& Mp4Writer::final_path() const { return impl_->final_path(); }

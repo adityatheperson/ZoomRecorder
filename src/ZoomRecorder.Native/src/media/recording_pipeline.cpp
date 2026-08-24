@@ -5,6 +5,7 @@
 #include "mp4_writer.h"
 #include "recording_readiness.h"
 #include "wasapi_source.h"
+#include "video_frame_normalizer.h"
 
 #include <condition_variable>
 #include <mutex>
@@ -93,7 +94,10 @@ class RecordingPipelineImpl {
             return;
           }
         }
-        if (!writer_.write_video(texture, time)) fail_encoder("Video encoder stopped");
+        auto* normalized = normalizer_.normalize(
+          writer_.device(), texture, writer_.video_width(), writer_.video_height());
+        if (!normalized) { fail("Zoom video frame could not be normalized"); return; }
+        if (!writer_.write_video(normalized, time)) fail_encoder("Video encoder stopped");
       },
       [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); },
       [this] { notify_window_lost(); });
@@ -157,7 +161,7 @@ class RecordingPipelineImpl {
   MeetingWindowWatchdog watchdog_;
   std::jthread watchdog_worker_;
   std::atomic_bool loss_notified_{};
-  RecordingReadiness readiness_; AudioMixer mixer_; Mp4Writer writer_;
+  RecordingReadiness readiness_; AudioMixer mixer_; Mp4Writer writer_; VideoFrameNormalizer normalizer_;
   std::unique_ptr<MeetingRegionSource> video_; std::unique_ptr<WasapiSource> meeting_audio_, microphone_;
   std::vector<float> meeting_buffer_, microphone_buffer_;
   std::wstring output_;

@@ -7,6 +7,7 @@ bool run_mp4_writer_tests();
 bool run_capture_crop_tests();
 bool run_meeting_window_watchdog_tests();
 bool run_audio_chunk_exporter_tests();
+bool run_aspect_fit_tests();
 
 int main() {
   if (!run_media_tests()) return EXIT_FAILURE;
@@ -14,6 +15,7 @@ int main() {
   if (!run_capture_crop_tests()) return EXIT_FAILURE;
   if (!run_meeting_window_watchdog_tests()) return EXIT_FAILURE;
   if (!run_audio_chunk_exporter_tests()) return EXIT_FAILURE;
+  if (!run_aspect_fit_tests()) return EXIT_FAILURE;
   zr_handle handle{};
   if (zr_create(&handle) != ZR_OK || !handle) return EXIT_FAILURE;
   if (zr_attach_recording_window(nullptr, 1) != ZR_INVALID_ARGUMENT) return EXIT_FAILURE;
