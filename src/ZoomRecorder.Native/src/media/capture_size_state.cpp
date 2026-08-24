@@ -1,14 +1,12 @@
 #include "capture_size_state.h"
 
-bool CaptureSizeState::observe(UINT width, UINT height) {
+bool CaptureSizeState::needs_recreate(UINT width, UINT height) const {
   if (!width || !height) return false;
-  if (!width_ || !height_) {
-    width_ = width;
-    height_ = height;
-    return false;
-  }
-  if (width == width_ && height == height_) return false;
+  return width_ && height_ && (width != width_ || height != height_);
+}
+
+void CaptureSizeState::commit(UINT width, UINT height) {
+  if (!width || !height) return;
   width_ = width;
   height_ = height;
-  return true;
 }

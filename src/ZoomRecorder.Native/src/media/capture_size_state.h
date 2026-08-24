@@ -4,7 +4,8 @@
 
 class CaptureSizeState {
  public:
-  bool observe(UINT width, UINT height);
+  bool needs_recreate(UINT width, UINT height) const;
+  void commit(UINT width, UINT height);
 
  private:
   UINT width_{};
