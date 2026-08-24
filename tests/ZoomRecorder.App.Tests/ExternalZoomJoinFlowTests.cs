@@ -53,24 +53,23 @@ public sealed class ExternalZoomJoinFlowTests
     }
 
     [Fact]
-    public async Task Capture_end_and_manual_stop_finalize_exactly_once()
+    public async Task Lost_prejoin_window_is_replaced_without_finalizing()
     {
+        var detector = new HandoffDetector((nint)84);
         var recording = new FakeRecording([]);
         var flow = new ExternalZoomJoinFlow(
             new FakeStore([]),
             new FakeLauncher([]),
-            new FakeDetector([], (nint)42),
+            detector,
             recording);
-        var completions = 0;
-        flow.RecordingCompleted += (_, _) => completions++;
         await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
 
-        flow.HandleNativeEvent("{\"type\":\"capture_ended\"}");
-        await flow.StopAndSaveAsync();
-        await recording.Finalized.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
+        await recording.Replaced.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        Assert.Equal(1, recording.StopCount);
-        Assert.Equal(1, completions);
+        Assert.Equal([(nint)84], recording.ReplacedHandles);
+        Assert.Equal((nint)42, detector.ExcludedHandle);
+        Assert.Equal(0, recording.StopCount);
     }
 
     [Fact]
@@ -89,17 +88,54 @@ public sealed class ExternalZoomJoinFlowTests
     }
 
     [Fact]
-    public async Task Native_callback_hands_finalization_off_before_stopping_capture()
+    public async Task Missing_replacement_finalizes_exactly_once()
     {
+        var detector = new HandoffDetector(new ZoomWindowTimeoutException());
         var recording = new FakeRecording([]);
         var flow = new ExternalZoomJoinFlow(
-            new FakeStore([]), new FakeLauncher([]), new FakeDetector([], (nint)42), recording);
+            new FakeStore([]), new FakeLauncher([]), detector, recording);
         await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
 
-        flow.HandleNativeEvent("{\"type\":\"capture_ended\"}");
+        flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
 
         Assert.Equal(0, recording.StopCount);
         await recording.Finalized.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, recording.StopCount);
+    }
+
+    [Fact]
+    public async Task Duplicate_window_loss_starts_only_one_handoff()
+    {
+        var replacement = new TaskCompletionSource<nint>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var detector = new HandoffDetector(replacement);
+        var recording = new FakeRecording([]);
+        var flow = new ExternalZoomJoinFlow(
+            new FakeStore([]), new FakeLauncher([]), detector, recording);
+        await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
+
+        flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
+        flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
+        await detector.HandoffStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(2, detector.CallCount);
+        replacement.SetResult((nint)84);
+        await recording.Replaced.Task.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task Manual_stop_cancels_handoff_and_finalizes_once()
+    {
+        var detector = new HandoffDetector();
+        var recording = new FakeRecording([]);
+        var flow = new ExternalZoomJoinFlow(
+            new FakeStore([]), new FakeLauncher([]), detector, recording);
+        await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
+        flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
+        await detector.HandoffStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await flow.StopAndSaveAsync();
+        await detector.HandoffCancelled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
         Assert.Equal(1, recording.StopCount);
     }
 
@@ -136,12 +172,40 @@ public sealed class ExternalZoomJoinFlowTests
             Task.FromException<nint>(exception);
     }
 
+    private sealed class HandoffDetector : IZoomWindowDetector
+    {
+        private readonly Task<nint>? replacement;
+        public int CallCount { get; private set; }
+        public nint ExcludedHandle { get; private set; }
+        public TaskCompletionSource HandoffStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource HandoffCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public HandoffDetector(nint replacementHandle) => replacement = Task.FromResult(replacementHandle);
+        public HandoffDetector(Exception exception) => replacement = Task.FromException<nint>(exception);
+        public HandoffDetector(TaskCompletionSource<nint> replacementSource) => replacement = replacementSource.Task;
+        public HandoffDetector() { }
+
+        public async Task<nint> WaitForMeetingWindowAsync(
+            TimeSpan timeout, CancellationToken cancellationToken, nint excludedHandle = default)
+        {
+            CallCount++;
+            if (CallCount == 1) return (nint)42;
+            ExcludedHandle = excludedHandle;
+            HandoffStarted.TrySetResult();
+            if (replacement is not null) return await replacement.WaitAsync(cancellationToken);
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+            catch (OperationCanceledException) { HandoffCancelled.TrySetResult(); throw; }
+            throw new InvalidOperationException();
+        }
+    }
+
     private sealed class FakeRecording(List<string> events, long resultByteSize = 1) : IWindowRecordingSession
     {
         public RecordingTarget? Target { get; private set; }
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
         public List<nint> ReplacedHandles { get; } = [];
+        public TaskCompletionSource Replaced { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Finalized { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task StartAsync(RecordingTarget target, nint meetingWindow, CancellationToken cancellationToken)
@@ -156,6 +220,7 @@ public sealed class ExternalZoomJoinFlowTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReplacedHandles.Add(meetingWindow);
+            Replaced.TrySetResult();
             events.Add($"replace:{meetingWindow}");
             return Task.CompletedTask;
         }

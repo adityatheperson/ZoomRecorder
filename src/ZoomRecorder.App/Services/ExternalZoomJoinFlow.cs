@@ -10,11 +10,16 @@ namespace ZoomRecorder.App.Services;
 internal sealed class ExternalZoomJoinFlow : IJoinFlow
 {
     private static readonly TimeSpan MeetingWindowTimeout = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan WindowHandoffTimeout = TimeSpan.FromSeconds(15);
     private readonly IRecordingStore recordingStore;
     private readonly IMeetingLauncher launcher;
     private readonly IZoomWindowDetector detector;
     private readonly IWindowRecordingSession recording;
     private readonly FinalizationGate finalization = new();
+    private readonly object handoffLock = new();
+    private CancellationTokenSource? handoffCancellation;
+    private Task? handoffTask;
+    private nint currentMeetingWindow;
 
     public event EventHandler<RecordingResult>? RecordingCompleted;
     public event EventHandler<string>? FinalizationFailed;
@@ -45,14 +50,17 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
     public async Task JoinAndRecordAsync(MeetingJoinRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        CancelHandoff();
         finalization.Reset();
         CurrentMeetingId = null;
+        currentMeetingWindow = nint.Zero;
         var target = await recordingStore.PrepareAsync(request, cancellationToken);
         try
         {
             await launcher.OpenAsync(ZoomMeetingLaunchUri.Create(request), cancellationToken);
             var meetingWindow = await detector.WaitForMeetingWindowAsync(MeetingWindowTimeout, cancellationToken);
             await recording.StartAsync(target, meetingWindow, cancellationToken);
+            currentMeetingWindow = meetingWindow;
             CurrentMeetingId = request.MeetingId.Trim();
         }
         catch
@@ -64,15 +72,15 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
 
     internal void HandleNativeEvent(string json)
     {
-        if (ShouldFinalize(json)) _ = FinalizeFromNativeAsync();
+        if (IsWindowLost(json)) StartHandoff();
     }
 
-    internal static bool ShouldFinalize(string json)
+    internal static bool IsWindowLost(string json)
     {
         try
         {
             using var document = JsonDocument.Parse(json);
-            return document.RootElement.TryGetProperty("type", out var type) && type.GetString() == "capture_ended";
+            return document.RootElement.TryGetProperty("type", out var type) && type.GetString() == "capture_window_lost";
         }
         catch (JsonException)
         {
@@ -80,17 +88,68 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
         }
     }
 
-    public Task StopAndSaveAsync() => FinalizeAsync();
-
-    private Task FinalizeFromNativeAsync() => Task.Run(async () =>
+    public Task StopAndSaveAsync()
     {
-        try { await FinalizeAsync().ConfigureAwait(false); }
-        catch { }
-    });
+        CancelHandoff();
+        return FinalizeAsync();
+    }
+
+    private void StartHandoff()
+    {
+        lock (handoffLock)
+        {
+            if (currentMeetingWindow == nint.Zero || handoffTask is { IsCompleted: false }) return;
+            handoffCancellation?.Dispose();
+            handoffCancellation = new CancellationTokenSource();
+            var cancellation = handoffCancellation;
+            var lostWindow = currentMeetingWindow;
+            handoffTask = Task.Run(() => HandoffAsync(lostWindow, cancellation));
+        }
+    }
+
+    private async Task HandoffAsync(nint lostWindow, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            var replacement = await detector.WaitForMeetingWindowAsync(
+                WindowHandoffTimeout, cancellation.Token, lostWindow).ConfigureAwait(false);
+            await recording.ReplaceWindowAsync(replacement, cancellation.Token).ConfigureAwait(false);
+            lock (handoffLock) currentMeetingWindow = replacement;
+        }
+        catch (ZoomWindowTimeoutException)
+        {
+            try { await FinalizeAsync().ConfigureAwait(false); }
+            catch { }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            FinalizationFailed?.Invoke(this, exception.Message);
+            try { await FinalizeAsync().ConfigureAwait(false); }
+            catch { }
+        }
+        finally
+        {
+            lock (handoffLock)
+            {
+                if (ReferenceEquals(handoffCancellation, cancellation)) handoffTask = null;
+            }
+        }
+    }
+
+    private void CancelHandoff()
+    {
+        lock (handoffLock) handoffCancellation?.Cancel();
+    }
 
     private async Task FinalizeAsync()
     {
         if (!finalization.TryBegin()) return;
+        lock (handoffLock)
+        {
+            currentMeetingWindow = nint.Zero;
+            handoffCancellation?.Cancel();
+        }
         try
         {
             var result = await recording.StopAndFinalizeIfStartedAsync(CancellationToken.None);
