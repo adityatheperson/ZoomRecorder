@@ -17,7 +17,11 @@ public sealed partial class ProcessingDialog : ContentDialog
     private async void StartClicked(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
         var deferral = args.GetDeferral();
-        try { await viewModel.StartAsync(CancellationToken.None); }
+        try
+        {
+            await viewModel.StartAsync(CancellationToken.None);
+            args.Cancel = viewModel.HasError;
+        }
         finally { deferral.Complete(); }
     }
 }

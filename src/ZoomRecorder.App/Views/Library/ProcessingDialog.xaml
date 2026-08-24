@@ -15,5 +15,7 @@
         <CheckBox Content="Delete the MP4 after verified processing" IsChecked="{Binding DeleteVideoAfterSuccess, Mode=TwoWay}" />
         <ProgressBar IsIndeterminate="{Binding IsProcessing}" />
         <TextBlock Text="{Binding StatusText}" />
+        <InfoBar IsOpen="{Binding HasError}" Severity="Error" Title="Processing stopped"
+                 Message="{Binding StatusText}" />
     </StackPanel>
 </ContentDialog>

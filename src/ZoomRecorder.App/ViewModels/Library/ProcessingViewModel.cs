@@ -15,6 +15,7 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     private readonly Func<CancellationToken, Task>? permanentDelete;
     private bool deleteVideoAfterSuccess;
     private bool isProcessing;
+    private bool hasError;
     private string statusText = "Ready to process";
 
     public ProcessingViewModel(
@@ -41,31 +42,35 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     public string ClassName { get; }
     public string? EstimatedUploadText { get; }
     public string? EstimatedCostText { get; }
-    public bool CloudNoticeWasPresented { get; private set; }
     public bool DeleteVideoAfterSuccess
     {
         get => deleteVideoAfterSuccess;
         set { if (deleteVideoAfterSuccess != value) { deleteVideoAfterSuccess = value; RaisePropertyChanged(); } }
     }
     public bool IsProcessing => isProcessing;
+    public bool HasError => hasError;
     public string StatusText => statusText;
     public bool PermanentDeleteDecisionPending { get; private set; }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        CloudNoticeWasPresented = true;
-        var estimate = EstimatedUploadText is null ? string.Empty : $" Estimated upload: {EstimatedUploadText}.";
-        var cost = EstimatedCostText is null ? string.Empty : $" Estimated cost: {EstimatedCostText}.";
-        if (!await notice.ConfirmAsync(
-            $"Audio from {ClassName} will leave this PC and be sent to OpenAI for processing.{estimate}{cost}",
-            cancellationToken))
-        {
-            return;
-        }
-
+        hasError = false;
+        RaisePropertyChanged(nameof(HasError));
         isProcessing = true;
         RaisePropertyChanged(nameof(IsProcessing));
-        await start(DeleteVideoAfterSuccess, cancellationToken);
+        try
+        {
+            await start(DeleteVideoAfterSuccess, cancellationToken);
+        }
+        catch (ProcessingOperationException error)
+        {
+            statusText = error.Message;
+            isProcessing = false;
+            hasError = true;
+            RaisePropertyChanged(nameof(StatusText));
+            RaisePropertyChanged(nameof(IsProcessing));
+            RaisePropertyChanged(nameof(HasError));
+        }
     }
 
     public Task CancelAsync(CancellationToken cancellationToken) => cancel(cancellationToken);

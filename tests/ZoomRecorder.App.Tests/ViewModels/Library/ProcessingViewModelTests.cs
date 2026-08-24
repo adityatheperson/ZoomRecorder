@@ -6,38 +6,35 @@ namespace ZoomRecorder.App.Tests.ViewModels.Library;
 public sealed class ProcessingViewModelTests
 {
     [Fact]
-    public async Task Start_requires_cloud_notice_and_never_defaults_delete_video_on()
+    public async Task Start_uses_inline_disclosure_without_opening_a_second_modal_or_enabling_video_deletion()
     {
         var notice = new NoticePresenter(true);
-        var started = false;
+        var starts = 0;
         var vm = new ProcessingViewModel(
             "Biology 101", 2_000_000, savedDeleteDefault: false, notice,
-            (_, _) => { started = true; return Task.CompletedTask; },
+            (_, _) => { starts++; return Task.CompletedTask; },
             _ => Task.CompletedTask);
 
         Assert.False(vm.DeleteVideoAfterSuccess);
         await vm.StartAsync(default);
 
-        Assert.True(vm.CloudNoticeWasPresented);
-        Assert.True(started);
-        Assert.Contains("audio", notice.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Biology 101", notice.Message);
+        Assert.Equal(0, notice.Calls);
+        Assert.Equal(1, starts);
     }
 
     [Fact]
-    public async Task Declined_cloud_notice_does_not_start_processing()
+    public async Task Processing_failure_keeps_the_dialog_alive_and_shows_the_error()
     {
-        var notice = new NoticePresenter(false);
-        var starts = 0;
         var vm = new ProcessingViewModel(
-            "Chemistry", null, false, notice,
-            (_, _) => { starts++; return Task.CompletedTask; },
+            "Biology 101", null, savedDeleteDefault: false, new NoticePresenter(true),
+            (_, _) => throw new ProcessingOperationException(CloudProcessingErrorCode.StudyGenerationUnavailable),
             _ => Task.CompletedTask);
 
         await vm.StartAsync(default);
 
-        Assert.Equal(0, starts);
         Assert.False(vm.IsProcessing);
+        Assert.True(vm.HasError);
+        Assert.Equal("Study materials could not be generated. Try again.", vm.StatusText);
     }
 
     [Theory]
@@ -85,9 +82,11 @@ public sealed class ProcessingViewModelTests
     private sealed class NoticePresenter(bool accepted) : ICloudNoticePresenter
     {
         public string Message { get; private set; } = string.Empty;
+        public int Calls { get; private set; }
 
         public Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken)
         {
+            Calls++;
             Message = message;
             return Task.FromResult(accepted);
         }
