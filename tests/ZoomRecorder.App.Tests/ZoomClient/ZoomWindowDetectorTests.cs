@@ -32,6 +32,22 @@ public sealed class ZoomWindowDetectorTests
     }
 
     [Fact]
+    public async Task Excluded_window_is_ignored_until_a_replacement_is_stable()
+    {
+        var oldWindow = Window((nint)7);
+        var replacement = Window((nint)8);
+        var detector = new ZoomWindowDetector(
+            new ScriptedEnumerator([oldWindow], [oldWindow, replacement], [replacement], [replacement]),
+            TimeProvider.System,
+            TimeSpan.FromMilliseconds(1));
+
+        var handle = await detector.WaitForMeetingWindowAsync(
+            TimeSpan.FromSeconds(1), CancellationToken.None, (nint)7);
+
+        Assert.Equal((nint)8, handle);
+    }
+
+    [Fact]
     public async Task Ambiguity_throws_a_typed_exception()
     {
         var detector = new ZoomWindowDetector(

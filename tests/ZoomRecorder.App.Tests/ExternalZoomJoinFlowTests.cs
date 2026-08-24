@@ -113,7 +113,7 @@ public sealed class ExternalZoomJoinFlowTests
 
     private sealed class FakeDetector(List<string> events, nint handle) : IZoomWindowDetector
     {
-        public Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        public Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken, nint excludedHandle = default)
         {
             events.Add("detect");
             return Task.FromResult(handle);
@@ -122,7 +122,7 @@ public sealed class ExternalZoomJoinFlowTests
 
     private sealed class ThrowingDetector(Exception exception) : IZoomWindowDetector
     {
-        public Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+        public Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken, nint excludedHandle = default) =>
             Task.FromException<nint>(exception);
     }
 

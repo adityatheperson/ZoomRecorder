@@ -8,7 +8,10 @@ public sealed class ZoomWindowTimeoutException()
 
 public interface IZoomWindowDetector
 {
-    Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken);
+    Task<nint> WaitForMeetingWindowAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        nint excludedHandle = default);
 }
 
 public sealed class ZoomWindowDetector : IZoomWindowDetector
@@ -32,7 +35,10 @@ public sealed class ZoomWindowDetector : IZoomWindowDetector
         }
     }
 
-    public async Task<nint> WaitForMeetingWindowAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    public async Task<nint> WaitForMeetingWindowAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        nint excludedHandle = default)
     {
         if (timeout <= TimeSpan.Zero)
         {
@@ -53,7 +59,13 @@ public sealed class ZoomWindowDetector : IZoomWindowDetector
             while (true)
             {
                 linkedCancellation.Token.ThrowIfCancellationRequested();
-                var selection = ZoomWindowSelection.Select(enumerator.Enumerate());
+                IReadOnlyList<ZoomWindowDescription> windows = enumerator.Enumerate();
+                if (excludedHandle != nint.Zero)
+                {
+                    windows = windows.Where(window => window.Handle != excludedHandle).ToArray();
+                }
+
+                var selection = ZoomWindowSelection.Select(windows);
                 if (selection.Kind == ZoomWindowSelectionKind.Ambiguous)
                 {
                     throw new ZoomWindowAmbiguousException();
