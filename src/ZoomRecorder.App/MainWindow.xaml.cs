@@ -301,6 +301,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
             (deleteVideo, token) => _services.Coordinator.StartAsync(new ProcessingRequest(
                 jobId, recording.Id, classId, recording.FilePath, jobDirectory, deleteVideo), token),
             token => _services.Coordinator.CancelAsync(jobId, token),
+            resume: token => _services.Coordinator.ResumeAsync(jobId, token),
             permanentDelete: async token =>
             {
                 token.ThrowIfCancellationRequested();

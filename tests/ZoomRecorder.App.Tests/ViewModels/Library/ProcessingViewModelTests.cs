@@ -112,6 +112,28 @@ public sealed class ProcessingViewModelTests
         await retry;
     }
 
+    [Fact]
+    public async Task Retry_resumes_the_failed_job_instead_of_creating_it_again()
+    {
+        var starts = 0;
+        var resumes = 0;
+        var vm = new ProcessingViewModel(
+            "Biology 101", null, false, new NoticePresenter(true),
+            (_, _) =>
+            {
+                starts++;
+                throw new ProcessingOperationException(CloudProcessingErrorCode.TranscriptionUnavailable);
+            },
+            _ => Task.CompletedTask,
+            resume: _ => { resumes++; return Task.CompletedTask; });
+
+        await vm.StartAsync(default);
+        await vm.StartAsync(default);
+
+        Assert.Equal(1, starts);
+        Assert.Equal(1, resumes);
+    }
+
     [Theory]
     [InlineData(ProcessingState.PreparingAudio, "Preparing audio")]
     [InlineData(ProcessingState.Transcribing, "Transcribing")]

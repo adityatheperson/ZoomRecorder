@@ -13,9 +13,11 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     private readonly Func<bool, CancellationToken, Task> start;
     private readonly Func<CancellationToken, Task> cancel;
     private readonly Func<CancellationToken, Task>? permanentDelete;
+    private readonly Func<CancellationToken, Task>? resume;
     private bool deleteVideoAfterSuccess;
     private bool isProcessing;
     private bool hasError;
+    private bool canResume;
     private string statusText = "Ready to process";
 
     public ProcessingViewModel(
@@ -26,7 +28,8 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         Func<bool, CancellationToken, Task> start,
         Func<CancellationToken, Task> cancel,
         decimal? estimatedCost = null,
-        Func<CancellationToken, Task>? permanentDelete = null)
+        Func<CancellationToken, Task>? permanentDelete = null,
+        Func<CancellationToken, Task>? resume = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(className);
         ClassName = className;
@@ -37,6 +40,7 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         this.start = start ?? throw new ArgumentNullException(nameof(start));
         this.cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
         this.permanentDelete = permanentDelete;
+        this.resume = resume;
     }
 
     public string ClassName { get; }
@@ -62,10 +66,14 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         RaisePropertyChanged(nameof(IsProcessing));
         try
         {
-            await start(DeleteVideoAfterSuccess, cancellationToken);
+            if (canResume && resume is not null)
+                await resume(cancellationToken);
+            else
+                await start(DeleteVideoAfterSuccess, cancellationToken);
         }
         catch (ProcessingOperationException error)
         {
+            canResume = resume is not null;
             ApplyFailure(error.Message);
         }
         catch (OperationCanceledException)
