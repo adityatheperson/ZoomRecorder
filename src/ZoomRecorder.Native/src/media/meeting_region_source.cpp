@@ -1,5 +1,5 @@
 #include "meeting_region_source.h"
-#include "capture_crop.h"
+#include "capture_size_state.h"
 
 #include <d3d11.h>
 #include <windows.graphics.capture.interop.h>
@@ -9,6 +9,7 @@
 #include <winrt/Windows.Graphics.DirectX.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <winrt/base.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -53,39 +54,47 @@ class MeetingRegionSourceImpl {
       // existing apartment and CreateFreeThreaded handles frame delivery.
       device_ = make_device(native_device_.get());
       item_ = item_for_window(capture_window_);
+      const auto initial_size = item_.Size();
+      if (initial_size.Width <= 0 || initial_size.Height <= 0) {
+        health_(false, "Zoom meeting window has invalid capture dimensions");
+        return false;
+      }
+      size_state_.observe(initial_size.Width, initial_size.Height);
       closed_token_ = item_.Closed([this](auto const&, auto const&) {
         if (!end_notified_.exchange(true)) ended_();
       });
-      pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, item_.Size());
+      pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, initial_size);
       frame_token_ = pool_.FrameArrived([this](auto const& sender, auto const&) {
         if (auto frame = sender.TryGetNextFrame()) {
+          const auto content_size = frame.ContentSize();
+          if (size_state_.observe(content_size.Width, content_size.Height)) {
+            frame.Close();
+            cropped_ = nullptr;
+            crop_width_ = crop_height_ = 0;
+            pool_.Recreate(device_, directx::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, content_size);
+            return;
+          }
           auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
           com_ptr<ID3D11Texture2D> texture;
           if (SUCCEEDED(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
             D3D11_TEXTURE2D_DESC source_description{};
             texture->GetDesc(&source_description);
-            RECT target_bounds{}, capture_bounds{};
-            CaptureCrop crop{};
-            if (!GetWindowRect(target_, &target_bounds) || !GetWindowRect(capture_window_, &capture_bounds) ||
-                !calculate_capture_crop(target_bounds, capture_bounds, source_description.Width, source_description.Height, crop)) {
-              health_(false, "Meeting area is outside the capturable app window");
-              return;
-            }
-            crop.width &= ~1u;
-            crop.height &= ~1u;
-            if (!crop.width || !crop.height) {
+            const UINT frame_width = (std::min)(static_cast<UINT>(content_size.Width), source_description.Width) & ~1u;
+            const UINT frame_height = (std::min)(static_cast<UINT>(content_size.Height), source_description.Height) & ~1u;
+            if (!frame_width || !frame_height) {
               health_(false, "Zoom meeting frame has invalid encoder dimensions");
               return;
             }
-            if (!cropped_ || crop.width != crop_width_ || crop.height != crop_height_) {
+            if (!cropped_ || frame_width != crop_width_ || frame_height != crop_height_) {
               D3D11_TEXTURE2D_DESC cropped_description = source_description;
-              cropped_description.Width = crop.width;
-              cropped_description.Height = crop.height;
+              cropped_description.Width = frame_width;
+              cropped_description.Height = frame_height;
               cropped_description.MipLevels = 1;
               cropped_description.ArraySize = 1;
               cropped_description.Usage = D3D11_USAGE_DEFAULT;
               cropped_description.CPUAccessFlags = 0;
               cropped_description.MiscFlags = 0;
+              cropped_description.BindFlags = 0;
               com_ptr<ID3D11Device> native_device;
               texture->GetDevice(native_device.put());
               if (FAILED(native_device->CreateTexture2D(&cropped_description, nullptr, cropped_.put()))) {
@@ -93,10 +102,10 @@ class MeetingRegionSourceImpl {
                 return;
               }
               native_device->GetImmediateContext(context_.put());
-              crop_width_ = crop.width;
-              crop_height_ = crop.height;
+              crop_width_ = frame_width;
+              crop_height_ = frame_height;
             }
-            const D3D11_BOX source_box{crop.left, crop.top, 0, crop.left + crop.width, crop.top + crop.height, 1};
+            const D3D11_BOX source_box{0, 0, 0, frame_width, frame_height, 1};
             context_->CopySubresourceRegion(cropped_.get(), 0, 0, 0, 0, texture.get(), 0, &source_box);
             const auto now = std::chrono::steady_clock::now().time_since_epoch();
             frame_(cropped_.get(), std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
@@ -149,6 +158,7 @@ class MeetingRegionSourceImpl {
   com_ptr<ID3D11DeviceContext> context_;
   UINT crop_width_{};
   UINT crop_height_{};
+  CaptureSizeState size_state_;
   event_token frame_token_{};
   event_token closed_token_{};
 };

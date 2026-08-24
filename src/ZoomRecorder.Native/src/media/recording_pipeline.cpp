@@ -87,9 +87,9 @@ class RecordingPipelineImpl {
       [this](ID3D11Texture2D* texture, std::int64_t time) {
         std::scoped_lock lock(writer_mutex_);
         if (!writer_.is_open()) {
-          D3D11_TEXTURE2D_DESC description{};
-          texture->GetDesc(&description);
-          if (!writer_.open(output_, description.Width, description.Height)) {
+          constexpr UINT output_width = 1920;
+          constexpr UINT output_height = 1080;
+          if (!writer_.open(output_, output_width, output_height, 30)) {
             fail("MP4 encoder could not start for the captured Zoom frame");
             return;
           }
