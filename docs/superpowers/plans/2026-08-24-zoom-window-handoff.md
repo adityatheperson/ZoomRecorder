@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Continue one MP4 recording when Zoom replaces its pre-join window with the real in-meeting window, and finalize only after no replacement appears for 15 seconds.
+**Goal:** Continue one full-window 1920x1080 MP4 recording when Zoom replaces or resizes its window, and finalize only after no replacement appears for 15 seconds.
 
-**Architecture:** Native capture reports a lost video window without stopping audio or finalizing the writer. The managed join flow supervises a bounded replacement search and calls a new native reattach operation. Native GPU normalization keeps every replacement frame at the MP4 stream's original dimensions with aspect-fit letterboxing.
+**Architecture:** Native capture reports a lost video window without stopping audio or finalizing the writer. The managed join flow supervises a bounded replacement search and calls a new native reattach operation. Native capture follows full-window size changes, while GPU normalization keeps every frame on a fixed 1920x1080 canvas with aspect-fit letterboxing.
 
 **Tech Stack:** C#/.NET 8, xUnit, C++20, Win32, Windows Graphics Capture, D3D11 Video Processor, Media Foundation, CMake/CTest.
 
@@ -16,7 +16,9 @@
 - Preserve meeting audio and microphone capture through a video-window handoff.
 - Use a 15-second replacement grace period.
 - Preserve exactly-once finalization.
-- Preserve aspect ratio with black letterboxing when replacement dimensions differ.
+- Encode every recording at 1920x1080, 30 FPS.
+- Capture the entire Zoom top-level window and recreate WGC buffers when its content size changes.
+- Preserve aspect ratio with black letterboxing when source dimensions differ.
 - Do not modify or delete the untracked `outputs/` and `work/` directories.
 
 ---
@@ -341,3 +343,90 @@ git commit -m "build: package Zoom window handoff fix"
 - [ ] **Step 5: Record final evidence**
 
 Report exact managed/native test counts, Release build outcome, package verifier outcome, output path, and manual-check result. Do not claim the manual scenario passed unless the resulting MP4 was opened and inspected.
+
+### Task 6: Correct Full-Window 1080p Capture and Resize Handling
+
+**Files:**
+- Create: `src/ZoomRecorder.Native/src/media/capture_size_state.h`
+- Create: `src/ZoomRecorder.Native/src/media/capture_size_state.cpp`
+- Create: `tests/ZoomRecorder.Native.Tests/capture_size_state_tests.cpp`
+- Modify: `src/ZoomRecorder.Native/src/media/meeting_region_source.cpp`
+- Modify: `src/ZoomRecorder.Native/src/media/recording_pipeline.cpp`
+- Modify: `src/ZoomRecorder.Native/src/media/mp4_writer.cpp`
+- Modify: `src/ZoomRecorder.Native/CMakeLists.txt`
+
+**Interfaces:**
+- Produces: `bool CaptureSizeState::observe(UINT width, UINT height)` returning `true` exactly when nonzero content dimensions change after initialization.
+- Consumes: `Direct3D11CaptureFrame::ContentSize()` and `Direct3D11CaptureFramePool::Recreate(...)`.
+- Produces: fixed encoder contract `Mp4Writer::open(output_, 1920, 1080, 30)`.
+
+- [ ] **Step 1: Write failing resize-state and fixed-output tests**
+
+Add `capture_size_state_tests.cpp` covering initial observation, unchanged dimensions, a larger resize, and zero-sized input:
+
+```cpp
+CaptureSizeState state;
+if (state.observe(800, 600)) return false;
+if (state.observe(800, 600)) return false;
+if (!state.observe(1600, 900)) return false;
+if (state.observe(0, 0)) return false;
+```
+
+Extend the GPU normalization test to normalize both an 800x600 texture and a 1600x900 texture into 1920x1080 and assert each output texture is exactly 1920x1080.
+
+- [ ] **Step 2: Build native tests and verify RED**
+
+Run:
+
+```powershell
+cmd /d /s /c "call C:\BuildTools\Common7\Tools\VsDevCmd.bat -arch=x64 -host_arch=x64 && C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe --build build-ninja --target ZoomRecorder.Native.Tests"
+```
+
+Expected: compile failure because `CaptureSizeState` does not exist, followed after test wiring by a behavioral failure until resize handling is implemented.
+
+- [ ] **Step 3: Implement full-window capture and frame-pool recreation**
+
+Implement `CaptureSizeState` as a focused nonzero dimension tracker. In the frame callback, read `frame.ContentSize()` before accessing the surface. If `observe` reports a change, release that frame and call:
+
+```cpp
+pool_.Recreate(
+    device_,
+    directx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+    3,
+    frame.ContentSize());
+return;
+```
+
+For normal frames, copy the valid rectangle `{0, 0, ContentSize.Width, ContentSize.Height}` from the captured root-window texture. Remove target-child/capture-root rectangle intersection from the video path so the entire `GraphicsCaptureItem` is passed downstream. Keep width and height even before creating the copied texture.
+
+- [ ] **Step 4: Open the writer at a fixed 1080p contract**
+
+In the first-frame writer branch, replace source-derived dimensions with:
+
+```cpp
+constexpr UINT output_width = 1920;
+constexpr UINT output_height = 1080;
+if (!writer_.open(output_, output_width, output_height, 30)) {
+  fail("MP4 encoder could not start for 1080p Zoom capture");
+  return;
+}
+```
+
+Continue passing every source texture through `VideoFrameNormalizer`, which aspect-fits into the writer's 1920x1080 dimensions.
+
+- [ ] **Step 5: Run Debug and Release verification**
+
+Run native Debug and Release CTest, Core tests, all staged App tests, WinUI Release build, and `eng/Verify-Release.ps1`. Expected: zero failures, a valid SDK-free package, and no build warnings introduced by these changes.
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add src/ZoomRecorder.Native tests/ZoomRecorder.Native.Tests
+git commit -m "fix: capture full Zoom window at 1080p"
+```
+
+- [ ] **Step 7: Package and manually verify**
+
+Replace `outputs/ZoomRecorder-0.3.0` from the verified Release build, launch through `Launch Zoom Recorder.cmd`, join from the pre-join screen, resize/maximize the real meeting window, leave, and open the finalized MP4.
+
+Expected: the MP4 reports 1920x1080, shows the entire Zoom window before and after resizing, keeps slides/text readable, and finalizes after the existing grace period.
