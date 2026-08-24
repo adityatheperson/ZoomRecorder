@@ -37,6 +37,81 @@ public sealed class ProcessingViewModelTests
         Assert.Equal("Study materials could not be generated. Try again.", vm.StatusText);
     }
 
+    [Fact]
+    public async Task Queued_needs_attention_progress_does_not_overwrite_the_actionable_error()
+    {
+        var vm = new ProcessingViewModel(
+            "Biology 101", null, false, new NoticePresenter(true),
+            (_, _) => throw new ProcessingOperationException(CloudProcessingErrorCode.TranscriptionUnavailable),
+            _ => Task.CompletedTask);
+
+        await vm.StartAsync(default);
+        vm.Apply(new ProcessingProgress(
+            Guid.NewGuid(), ProcessingState.NeedsAttention, 0, 1,
+            ClassGuideOutcome.NotAttempted, CloudProcessingErrorCode.TranscriptionUnavailable));
+
+        Assert.Equal("Transcription could not be completed. Try again.", vm.StatusText);
+        Assert.True(vm.HasError);
+    }
+
+    [Fact]
+    public async Task Unexpected_start_failure_is_contained_and_shows_a_safe_error()
+    {
+        var vm = new ProcessingViewModel(
+            "Biology 101", null, false, new NoticePresenter(true),
+            (_, _) => throw new InvalidOperationException("private diagnostic"),
+            _ => Task.CompletedTask);
+
+        await vm.StartAsync(default);
+
+        Assert.False(vm.IsProcessing);
+        Assert.True(vm.HasError);
+        Assert.Equal("Processing stopped unexpectedly. Try again.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Cancellation_is_contained_at_the_dialog_boundary()
+    {
+        var vm = new ProcessingViewModel(
+            "Biology 101", null, false, new NoticePresenter(true),
+            (_, _) => throw new OperationCanceledException(),
+            _ => Task.CompletedTask);
+
+        await vm.StartAsync(default);
+
+        Assert.False(vm.IsProcessing);
+        Assert.True(vm.HasError);
+        Assert.Equal("Processing was cancelled.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Retry_clears_the_previous_error_before_starting_again()
+    {
+        var retryStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        var vm = new ProcessingViewModel(
+            "Biology 101", null, false, new NoticePresenter(true),
+            async (_, _) =>
+            {
+                if (++attempts == 1)
+                    throw new ProcessingOperationException(CloudProcessingErrorCode.StudyGenerationUnavailable);
+                retryStarted.SetResult();
+                await releaseRetry.Task;
+            },
+            _ => Task.CompletedTask);
+
+        await vm.StartAsync(default);
+        var retry = vm.StartAsync(default);
+        await retryStarted.Task;
+
+        Assert.False(vm.HasError);
+        Assert.Equal("Starting processing", vm.StatusText);
+
+        releaseRetry.SetResult();
+        await retry;
+    }
+
     [Theory]
     [InlineData(ProcessingState.PreparingAudio, "Preparing audio")]
     [InlineData(ProcessingState.Transcribing, "Transcribing")]

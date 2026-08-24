@@ -55,8 +55,10 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         hasError = false;
-        RaisePropertyChanged(nameof(HasError));
+        statusText = "Starting processing";
         isProcessing = true;
+        RaisePropertyChanged(nameof(HasError));
+        RaisePropertyChanged(nameof(StatusText));
         RaisePropertyChanged(nameof(IsProcessing));
         try
         {
@@ -64,12 +66,15 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         }
         catch (ProcessingOperationException error)
         {
-            statusText = error.Message;
-            isProcessing = false;
-            hasError = true;
-            RaisePropertyChanged(nameof(StatusText));
-            RaisePropertyChanged(nameof(IsProcessing));
-            RaisePropertyChanged(nameof(HasError));
+            ApplyFailure(error.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            ApplyFailure("Processing was cancelled.");
+        }
+        catch (Exception)
+        {
+            ApplyFailure("Processing stopped unexpectedly. Try again.");
         }
     }
 
@@ -95,6 +100,12 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     public void Apply(ProcessingProgress progress)
     {
         ArgumentNullException.ThrowIfNull(progress);
+        if (hasError && progress.State == ProcessingState.NeedsAttention)
+        {
+            isProcessing = false;
+            RaisePropertyChanged(nameof(IsProcessing));
+            return;
+        }
         statusText = progress.State switch
         {
             ProcessingState.PreparingAudio => "Preparing audio",
@@ -110,6 +121,16 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
             ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide;
         RaisePropertyChanged(nameof(StatusText));
         RaisePropertyChanged(nameof(IsProcessing));
+    }
+
+    private void ApplyFailure(string message)
+    {
+        statusText = message;
+        isProcessing = false;
+        hasError = true;
+        RaisePropertyChanged(nameof(StatusText));
+        RaisePropertyChanged(nameof(IsProcessing));
+        RaisePropertyChanged(nameof(HasError));
     }
 
     private static string FormatBytes(long bytes)
