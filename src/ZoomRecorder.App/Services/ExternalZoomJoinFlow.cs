@@ -19,6 +19,7 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
     private readonly object handoffLock = new();
     private CancellationTokenSource? handoffCancellation;
     private Task? handoffTask;
+    private bool pendingWindowLoss;
     private nint currentMeetingWindow;
 
     public event EventHandler<RecordingResult>? RecordingCompleted;
@@ -54,6 +55,7 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
         finalization.Reset();
         CurrentMeetingId = null;
         currentMeetingWindow = nint.Zero;
+        pendingWindowLoss = false;
         var target = await recordingStore.PrepareAsync(request, cancellationToken);
         try
         {
@@ -98,7 +100,13 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
     {
         lock (handoffLock)
         {
-            if (currentMeetingWindow == nint.Zero || handoffTask is { IsCompleted: false }) return;
+            if (currentMeetingWindow == nint.Zero) return;
+            if (handoffTask is { IsCompleted: false })
+            {
+                pendingWindowLoss = true;
+                return;
+            }
+            pendingWindowLoss = false;
             handoffCancellation?.Dispose();
             handoffCancellation = new CancellationTokenSource();
             var cancellation = handoffCancellation;
@@ -130,10 +138,17 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
         }
         finally
         {
+            var restart = false;
             lock (handoffLock)
             {
-                if (ReferenceEquals(handoffCancellation, cancellation)) handoffTask = null;
+                if (ReferenceEquals(handoffCancellation, cancellation))
+                {
+                    handoffTask = null;
+                    restart = pendingWindowLoss && currentMeetingWindow != nint.Zero;
+                    pendingWindowLoss = false;
+                }
             }
+            if (restart) StartHandoff();
         }
     }
 
@@ -148,6 +163,7 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
         lock (handoffLock)
         {
             currentMeetingWindow = nint.Zero;
+            pendingWindowLoss = false;
             handoffCancellation?.Cancel();
         }
         try

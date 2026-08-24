@@ -10,6 +10,8 @@ class VideoFrameNormalizer {
  private:
   bool configure(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& source, UINT width, UINT height);
   Microsoft::WRL::ComPtr<ID3D11Texture2D> output_;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> input_;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
   Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device_;
   Microsoft::WRL::ComPtr<ID3D11VideoContext> video_context_;
   Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> enumerator_;

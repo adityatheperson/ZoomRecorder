@@ -123,6 +123,22 @@ public sealed class ExternalZoomJoinFlowTests
     }
 
     [Fact]
+    public async Task Loss_raised_during_reattach_starts_a_followup_handoff()
+    {
+        var detector = new HandoffDetector((nint)84);
+        var recording = new FakeRecording([]);
+        var flow = new ExternalZoomJoinFlow(
+            new FakeStore([]), new FakeLauncher([]), detector, recording);
+        recording.OnReplace = () => flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
+        await flow.JoinAndRecordAsync(new MeetingJoinRequest("1234567890", null), CancellationToken.None);
+
+        flow.HandleNativeEvent("{\"type\":\"capture_window_lost\"}");
+        await recording.TwoReplacements.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(3, detector.CallCount);
+    }
+
+    [Fact]
     public async Task Manual_stop_cancels_handoff_and_finalizes_once()
     {
         var detector = new HandoffDetector();
@@ -206,6 +222,8 @@ public sealed class ExternalZoomJoinFlowTests
         public int StopCount { get; private set; }
         public List<nint> ReplacedHandles { get; } = [];
         public TaskCompletionSource Replaced { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TwoReplacements { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Action? OnReplace { get; set; }
         public TaskCompletionSource Finalized { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task StartAsync(RecordingTarget target, nint meetingWindow, CancellationToken cancellationToken)
@@ -221,6 +239,10 @@ public sealed class ExternalZoomJoinFlowTests
             cancellationToken.ThrowIfCancellationRequested();
             ReplacedHandles.Add(meetingWindow);
             Replaced.TrySetResult();
+            if (ReplacedHandles.Count == 2) TwoReplacements.TrySetResult();
+            var callback = OnReplace;
+            OnReplace = null;
+            callback?.Invoke();
             events.Add($"replace:{meetingWindow}");
             return Task.CompletedTask;
         }

@@ -4,12 +4,11 @@
 using Microsoft::WRL::ComPtr;
 
 bool VideoFrameNormalizer::configure(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& source, UINT width, UINT height) {
-  output_.Reset(); output_view_.Reset(); processor_.Reset(); enumerator_.Reset(); video_context_.Reset(); video_device_.Reset();
+  output_.Reset(); input_.Reset(); output_view_.Reset(); processor_.Reset(); enumerator_.Reset(); context_.Reset(); video_context_.Reset(); video_device_.Reset();
   if (!device || !source.Width || !source.Height || !width || !height) return false;
   if (FAILED(device->QueryInterface(IID_PPV_ARGS(&video_device_)))) return false;
-  ComPtr<ID3D11DeviceContext> context;
-  device->GetImmediateContext(&context);
-  if (!context || FAILED(context.As(&video_context_))) return false;
+  device->GetImmediateContext(&context_);
+  if (!context_ || FAILED(context_.As(&video_context_))) return false;
   D3D11_VIDEO_PROCESSOR_CONTENT_DESC content{};
   content.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
   content.InputWidth = source.Width; content.InputHeight = source.Height;
@@ -17,6 +16,12 @@ bool VideoFrameNormalizer::configure(ID3D11Device* device, const D3D11_TEXTURE2D
   content.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
   if (FAILED(video_device_->CreateVideoProcessorEnumerator(&content, &enumerator_)) ||
       FAILED(video_device_->CreateVideoProcessor(enumerator_.Get(), 0, &processor_))) return false;
+  auto input_texture_description = source;
+  input_texture_description.MipLevels = 1; input_texture_description.ArraySize = 1;
+  input_texture_description.Usage = D3D11_USAGE_DEFAULT;
+  input_texture_description.BindFlags = 0;
+  input_texture_description.CPUAccessFlags = 0; input_texture_description.MiscFlags = 0;
+  if (FAILED(device->CreateTexture2D(&input_texture_description, nullptr, &input_))) return false;
   auto output_description = source;
   output_description.Width = width; output_description.Height = height;
   output_description.MipLevels = 1; output_description.ArraySize = 1;
@@ -44,7 +49,8 @@ ID3D11Texture2D* VideoFrameNormalizer::normalize(ID3D11Device* device, ID3D11Tex
   D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC input_description{};
   input_description.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
   ComPtr<ID3D11VideoProcessorInputView> input;
-  if (FAILED(video_device_->CreateVideoProcessorInputView(source, enumerator_.Get(), &input_description, &input))) return nullptr;
+  context_->CopyResource(input_.Get(), source);
+  if (FAILED(video_device_->CreateVideoProcessorInputView(input_.Get(), enumerator_.Get(), &input_description, &input))) return nullptr;
   const auto fit = calculate_aspect_fit(description.Width, description.Height, width, height);
   if (!fit.width || !fit.height) return nullptr;
   RECT source_rect{0, 0, static_cast<LONG>(description.Width), static_cast<LONG>(description.Height)};
