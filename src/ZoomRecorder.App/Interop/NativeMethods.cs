@@ -42,6 +42,7 @@ internal static partial class NativeMethods
     [LibraryImport(Library)] internal static partial ZrResult zr_destroy(nint handle);
     [LibraryImport(Library)] internal static partial ZrResult zr_set_event_callback(nint handle, EventCallback callback, nint context);
     [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf16)] internal static partial ZrResult zr_start_recording(nint handle, string outputPath, nint meetingWindow);
+    [LibraryImport(Library)] internal static partial ZrResult zr_attach_recording_window(nint handle, nint meetingWindow);
     [LibraryImport(Library)] internal static partial ZrResult zr_finalize_recording(nint handle);
     [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf16)]
     internal static unsafe partial ZrResult zr_prepare_audio_chunks(

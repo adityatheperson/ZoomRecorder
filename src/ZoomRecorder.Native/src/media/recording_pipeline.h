@@ -15,6 +15,7 @@ class RecordingPipeline {
   ~RecordingPipeline();
   bool start(const std::wstring& output_path);
   bool attach_video(HWND meeting_window);
+  bool replace_video(HWND meeting_window);
   bool stop_and_finalize();
   bool is_ready() const;
  private:

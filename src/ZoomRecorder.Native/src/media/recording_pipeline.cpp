@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <thread>
 #include <cstdio>
+#include <atomic>
 
 namespace {
 std::vector<float> normalize_audio(std::span<const float> input, unsigned rate, unsigned short channels) {
@@ -62,6 +63,19 @@ class RecordingPipelineImpl {
   bool attach_video(HWND meeting_window) {
     std::scoped_lock attach_lock(video_attach_mutex_);
     if (video_ || !IsWindow(meeting_window)) return video_ != nullptr;
+    return attach_video_source(meeting_window);
+  }
+
+  bool replace_video(HWND meeting_window) {
+    std::scoped_lock attach_lock(video_attach_mutex_);
+    if (!IsWindow(meeting_window)) return false;
+    stop_watchdog();
+    if (video_) video_->stop();
+    video_.reset();
+    return attach_video_source(meeting_window);
+  }
+
+  bool attach_video_source(HWND meeting_window) {
     ID3D11Device* capture_device{};
     {
       std::scoped_lock writer_lock(writer_mutex_);
@@ -82,7 +96,9 @@ class RecordingPipelineImpl {
         if (!writer_.write_video(texture, time)) fail_encoder("Video encoder stopped");
       },
       [this](bool ok, const char* message) { component_health(RecordingComponent::Video, ok, message); },
-      [this] { ended_(); });
+      [this] { notify_window_lost(); });
+    loss_notified_ = false;
+    watchdog_ = MeetingWindowWatchdog{};
     if (!video_->start()) { video_.reset(); return false; }
     start_watchdog(meeting_window);
     return true;
@@ -100,12 +116,16 @@ class RecordingPipelineImpl {
     watchdog_worker_ = std::jthread([this, window](std::stop_token stop) {
       while (!stop.stop_requested()) {
         if (watchdog_.observe(IsWindow(window) != FALSE, IsWindowVisible(window) != FALSE)) {
-          ended_();
+          notify_window_lost();
           return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
     });
+  }
+  void notify_window_lost() {
+    bool expected = false;
+    if (loss_notified_.compare_exchange_strong(expected, true)) ended_();
   }
   void stop_watchdog() {
     watchdog_worker_.request_stop();
@@ -136,6 +156,7 @@ class RecordingPipelineImpl {
   RecordingPipeline::EndedCallback ended_;
   MeetingWindowWatchdog watchdog_;
   std::jthread watchdog_worker_;
+  std::atomic_bool loss_notified_{};
   RecordingReadiness readiness_; AudioMixer mixer_; Mp4Writer writer_;
   std::unique_ptr<MeetingRegionSource> video_; std::unique_ptr<WasapiSource> meeting_audio_, microphone_;
   std::vector<float> meeting_buffer_, microphone_buffer_;
@@ -147,5 +168,6 @@ RecordingPipeline::RecordingPipeline(HealthCallback health, EndedCallback ended)
 RecordingPipeline::~RecordingPipeline() = default;
 bool RecordingPipeline::start(const std::wstring& path) { return impl_->start(path); }
 bool RecordingPipeline::attach_video(HWND window) { return impl_->attach_video(window); }
+bool RecordingPipeline::replace_video(HWND window) { return impl_->replace_video(window); }
 bool RecordingPipeline::stop_and_finalize() { return impl_->stop_and_finalize(); }
 bool RecordingPipeline::is_ready() const { return impl_->is_ready(); }

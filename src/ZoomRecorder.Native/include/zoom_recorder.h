@@ -41,6 +41,7 @@ ZR_API zr_result zr_create(zr_handle* out_handle);
 ZR_API zr_result zr_destroy(zr_handle handle);
 ZR_API zr_result zr_set_event_callback(zr_handle handle, zr_event_callback callback, void* context);
 ZR_API zr_result zr_start_recording(zr_handle handle, const wchar_t* output_path, intptr_t meeting_window);
+ZR_API zr_result zr_attach_recording_window(zr_handle handle, intptr_t meeting_window);
 ZR_API zr_result zr_finalize_recording(zr_handle handle);
 ZR_API zr_result zr_prepare_audio_chunks(
     const wchar_t* mp4_path,

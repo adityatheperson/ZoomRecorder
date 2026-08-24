@@ -9,6 +9,16 @@ namespace ZoomRecorder.App.Tests;
 public sealed class ExternalZoomJoinFlowTests
 {
     [Fact]
+    public async Task Recording_session_contract_can_replace_the_capture_window()
+    {
+        IWindowRecordingSession recording = new FakeRecording([]);
+
+        await recording.ReplaceWindowAsync((nint)84, CancellationToken.None);
+
+        Assert.Equal([(nint)84], ((FakeRecording)recording).ReplacedHandles);
+    }
+
+    [Fact]
     public async Task Prepares_launches_detects_then_starts_with_the_exact_window()
     {
         var events = new List<string>();
@@ -131,6 +141,7 @@ public sealed class ExternalZoomJoinFlowTests
         public RecordingTarget? Target { get; private set; }
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
+        public List<nint> ReplacedHandles { get; } = [];
         public TaskCompletionSource Finalized { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task StartAsync(RecordingTarget target, nint meetingWindow, CancellationToken cancellationToken)
@@ -138,6 +149,14 @@ public sealed class ExternalZoomJoinFlowTests
             StartCount++;
             Target = target;
             events.Add($"start:{meetingWindow}");
+            return Task.CompletedTask;
+        }
+
+        public Task ReplaceWindowAsync(nint meetingWindow, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReplacedHandles.Add(meetingWindow);
+            events.Add($"replace:{meetingWindow}");
             return Task.CompletedTask;
         }
 

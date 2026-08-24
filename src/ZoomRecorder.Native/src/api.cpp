@@ -73,7 +73,7 @@ zr_result zr_create(zr_handle* out_handle) {
     value->pipeline = std::make_unique<RecordingPipeline>([raw](bool ok, const char* message) {
       const std::string event = std::string{"{\"type\":\""} + (ok ? "component_ready" : "failed") + "\",\"message\":\"" + message + "\"}";
       emit(*raw, event.c_str());
-    }, [raw] { emit(*raw, R"({"type":"capture_ended"})"); });
+    }, [raw] { emit(*raw, R"({"type":"capture_window_lost"})"); });
     *out_handle = value.release(); return ZR_OK;
   }
   catch (...) { *out_handle = nullptr; return ZR_INTERNAL_ERROR; }
@@ -116,6 +116,16 @@ zr_result zr_finalize_recording(zr_handle handle) {
   const auto finalized = value.pipeline->stop_and_finalize();
   value.recording_started = false; emit(value, R"({"type":"recording_finalized"})");
   return finalized ? ZR_OK : ZR_INTERNAL_ERROR;
+}
+
+zr_result zr_attach_recording_window(zr_handle handle, intptr_t meeting_window) {
+  if (!handle || !meeting_window) return ZR_INVALID_ARGUMENT;
+  const auto window = reinterpret_cast<HWND>(meeting_window);
+  if (!IsWindow(window)) return ZR_INVALID_ARGUMENT;
+  auto& value = *static_cast<session*>(handle);
+  std::scoped_lock lock(value.mutex);
+  if (!value.recording_started) return ZR_INVALID_STATE;
+  return value.pipeline->replace_video(window) ? ZR_OK : ZR_INTERNAL_ERROR;
 }
 
 zr_result zr_prepare_audio_chunks(

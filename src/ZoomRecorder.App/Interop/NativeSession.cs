@@ -19,6 +19,7 @@ internal sealed class NativeSession : IDisposable
     }
 
     public void StartRecording(string path, nint meetingWindow) { lastNativeError = null; ThrowIfFailed(NativeMethods.zr_start_recording(handle.DangerousGetHandle(), path, meetingWindow), "start recording"); }
+    public void ReplaceRecordingWindow(nint meetingWindow) { lastNativeError = null; ThrowIfFailed(NativeMethods.zr_attach_recording_window(handle.DangerousGetHandle(), meetingWindow), "attach replacement Zoom window"); }
     public void FinalizeRecording() { lastNativeError = null; ThrowIfFailed(NativeMethods.zr_finalize_recording(handle.DangerousGetHandle()), "finalize recording"); }
     public void Dispose() => handle.Dispose();
 
