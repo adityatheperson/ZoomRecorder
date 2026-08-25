@@ -1,4 +1,4 @@
-using System.Net;
+using System.Security.Cryptography;
 using ZoomRecorder.App.Composition;
 using ZoomRecorder.App.Data;
 using ZoomRecorder.App.LocalTranscription;
@@ -12,13 +12,17 @@ public sealed class AppServicesTests
     public async Task Transcript_only_composition_uses_local_whisper_without_reading_credentials()
     {
         using var files = new ServiceFiles();
-        using var http = new HttpClient(new RejectingHandler());
+        var handler = new RejectingHandler();
+        using var http = new HttpClient(handler);
         var vault = new CountingVault();
+        var modelBytes = new byte[] { 0x42 };
+        Directory.CreateDirectory(files.Models);
+        File.WriteAllBytes(Path.Combine(files.Models, "ggml-small.en.bin"), modelBytes);
         var manifest = new WhisperModelManifest(
             "ggml-small.en.bin",
             new Uri("https://huggingface.co/ggerganov/whisper.cpp/resolve/revision/ggml-small.en.bin"),
-            1,
-            new string('a', 64));
+            modelBytes.Length,
+            Convert.ToHexString(SHA256.HashData(modelBytes)).ToLowerInvariant());
         var localPaths = new LocalTranscriptionPaths(files.Models, files.GpuWorker, files.CpuWorker);
 
         await using var services = await AppServices.CreateAsync(
@@ -27,7 +31,15 @@ public sealed class AppServicesTests
         var field = typeof(ProcessingCoordinator).GetField(
             "transcription",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        Assert.IsType<LocalWhisperTranscriptionClient>(field!.GetValue(services.Coordinator));
+        var transcription = Assert.IsType<LocalWhisperTranscriptionClient>(field!.GetValue(services.Coordinator));
+        var modelField = typeof(LocalWhisperTranscriptionClient).GetField(
+            "modelManager",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var modelManager = Assert.IsAssignableFrom<IWhisperModelManager>(modelField!.GetValue(transcription));
+        Assert.Equal(
+            Path.Combine(files.Models, "ggml-small.en.bin"),
+            await modelManager.EnsureModelAsync(null, CancellationToken.None));
+        Assert.Equal(0, handler.Calls);
         Assert.Equal(0, vault.Reads);
         Assert.Equal(0, vault.Writes);
         Assert.Equal(0, vault.Deletes);
@@ -45,8 +57,9 @@ public sealed class AppServicesTests
 
     private sealed class RejectingHandler : HttpMessageHandler
     {
+        public int Calls { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            throw new InvalidOperationException($"Offline cached-model test attempted network call {++Calls}.");
     }
 
     private sealed class ServiceFiles : IDisposable

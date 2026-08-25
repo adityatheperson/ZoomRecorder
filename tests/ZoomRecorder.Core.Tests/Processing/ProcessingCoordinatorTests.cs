@@ -190,6 +190,28 @@ public sealed class ProcessingCoordinatorTests
         await fixture.Coordinator.ResumeAsync(JobId, default);
 
         Assert.Equal([0, 1, 1], fixture.Transcriber.RequestedChunkIndexes);
+        Assert.True(File.Exists(fixture.Request.Mp4Path));
+    }
+
+    [Fact]
+    public async Task Cloud_era_transcribing_attention_job_resumes_from_existing_m4a_without_cloud_calls()
+    {
+        using var fixture = new Fixture();
+        fixture.Transcriber.FailIndex = 0;
+        await Assert.ThrowsAsync<ProcessingOperationException>(() =>
+            fixture.Coordinator.StartAsync(fixture.Request, CancellationToken.None));
+        var checkpointedAudio = await fixture.Store.ListAudioChunksAsync(JobId, CancellationToken.None);
+        Assert.All(checkpointedAudio, chunk => Assert.EndsWith(".m4a", chunk.Path, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, fixture.Audio.Calls);
+
+        fixture.Transcriber.FailIndex = null;
+        await fixture.Coordinator.ResumeAsync(JobId, CancellationToken.None);
+
+        Assert.Equal(1, fixture.Audio.Calls);
+        Assert.Equal([0, 0, 1], fixture.Transcriber.RequestedChunkIndexes);
+        Assert.Equal(0, fixture.Generator.LectureCalls);
+        Assert.Equal(0, fixture.Generator.GuideCalls);
+        Assert.True(File.Exists(fixture.Request.Mp4Path));
     }
 
     [Fact]
@@ -774,6 +796,7 @@ public sealed class ProcessingCoordinatorTests
 
     private sealed class FakeAudioChunkPreparer(FakeArtifactStore artifacts, string jobDirectory) : IAudioChunkPreparer
     {
+        internal int Calls { get; private set; }
         internal Action? OnCall { get; set; }
         internal int? ChangedIndex { get; set; }
         internal string? ReturnedDirectory { get; set; }
@@ -784,6 +807,7 @@ public sealed class ProcessingCoordinatorTests
             long maxBytes,
             CancellationToken cancellationToken)
         {
+            Calls++;
             cancellationToken.ThrowIfCancellationRequested();
             OnCall?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
