@@ -9,7 +9,13 @@ internal sealed class OpenAiTranscriptionClient(OpenAiApiClient api) : ITranscri
 {
     private readonly OpenAiApiClient api = api ?? throw new ArgumentNullException(nameof(api));
 
-    public async Task<TranscriptChunk> TranscribeAsync(AudioChunk chunk, CancellationToken cancellationToken)
+    public Task<TranscriptChunk> TranscribeAsync(AudioChunk chunk, CancellationToken cancellationToken) =>
+        TranscribeAsync(chunk, progress: null, cancellationToken: cancellationToken);
+
+    public async Task<TranscriptChunk> TranscribeAsync(
+        AudioChunk chunk,
+        IProgress<TranscriptionActivity>? progress,
+        CancellationToken cancellationToken)
     {
         Validate(chunk);
         cancellationToken.ThrowIfCancellationRequested();

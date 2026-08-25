@@ -10,6 +10,18 @@ public sealed record AudioChunk(
 
 public sealed record RecycleResult(bool Recycled, string? RecycledPath);
 
+public enum TranscriptionActivityKind
+{
+    AcquiringModel,
+    Transcribing,
+    UsingCpuFallback
+}
+
+public sealed record TranscriptionActivity(
+    TranscriptionActivityKind Kind,
+    long? CompletedBytes = null,
+    long? TotalBytes = null);
+
 public interface IAudioChunkPreparer
 {
     Task<IReadOnlyList<AudioChunk>> PrepareAsync(
@@ -21,7 +33,10 @@ public interface IAudioChunkPreparer
 
 public interface ITranscriptionClient
 {
-    Task<TranscriptChunk> TranscribeAsync(AudioChunk chunk, CancellationToken cancellationToken);
+    Task<TranscriptChunk> TranscribeAsync(
+        AudioChunk chunk,
+        IProgress<TranscriptionActivity>? progress,
+        CancellationToken cancellationToken);
 }
 
 public interface IStudyGenerationClient

@@ -8,7 +8,12 @@ public enum CloudProcessingErrorCode
     ClassGuideUpdateFailed,
     StorageCommitFailed,
     CredentialUnavailable,
-    VideoRecycleFailed
+    VideoRecycleFailed,
+    ModelDownloadFailed,
+    ModelVerificationFailed,
+    LocalAudioConversionFailed,
+    LocalTranscriptionRuntimeFailed,
+    LocalTranscriptionOutputInvalid
 }
 
 public sealed class ProcessingJob
@@ -135,6 +140,20 @@ public sealed class ProcessingJob
 
     public void MarkTranscriptCommitted(DateTimeOffset now) =>
         MarkCommit(now, () => TranscriptCommitted = true);
+
+    public void CompleteTranscriptOnly(DateTimeOffset now)
+    {
+        EnsureTimestamp(now);
+        if (State is not (ProcessingState.Transcribing or ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide) ||
+            !TranscriptCommitted)
+        {
+            throw new InvalidProcessingTransitionException(State, ProcessingState.Completed);
+        }
+
+        State = ProcessingState.Completed;
+        UpdatedAt = now;
+        CompletedAt = now;
+    }
 
     public void MarkLecturePackageCommitted(DateTimeOffset now) =>
         MarkCommit(now, () => LecturePackageCommitted = true);

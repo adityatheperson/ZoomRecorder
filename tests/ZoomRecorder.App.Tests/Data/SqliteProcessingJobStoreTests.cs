@@ -76,6 +76,55 @@ public sealed class SqliteProcessingJobStoreTests
     }
 
     [Fact]
+    public async Task CompleteTranscriptOnly_completes_committed_transcript_without_study_artifacts()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "transcript-only");
+        var store = Store(database);
+        var job = await store.CreateAsync(request, default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.ReadyToProcess, ProcessingState.PreparingAudio, default);
+        job = await store.SaveAudioChunksAsync(request.JobId, job.Revision, [Chunk(request, 0, 0, 10_000, HashA)], default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.PreparingAudio, ProcessingState.Transcribing, default);
+        job = await store.CommitTranscriptAsync(request.JobId, job.Revision, Artifact(temp.File("transcript.json"), HashB), default);
+
+        var completed = await store.CompleteTranscriptOnlyAsync(request.JobId, job.Revision, default);
+
+        Assert.Equal(ProcessingState.Completed, completed.State);
+        Assert.True(completed.TranscriptCommitted);
+        Assert.False(completed.LecturePackageCommitted);
+        Assert.False(completed.AssignmentsCommitted);
+        Assert.Equal(ClassGuideOutcome.NotAttempted, completed.GuideOutcome);
+    }
+
+    [Fact]
+    public async Task CompleteTranscriptOnly_completes_a_transcript_stage_attention_job_and_clears_failure()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "transcript-attention");
+        var store = Store(database);
+        var job = await store.CreateAsync(request, default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.ReadyToProcess, ProcessingState.PreparingAudio, default);
+        job = await store.SaveAudioChunksAsync(request.JobId, job.Revision, [Chunk(request, 0, 0, 10_000, HashA)], default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.PreparingAudio, ProcessingState.Transcribing, default);
+        job = await store.CommitTranscriptAsync(request.JobId, job.Revision, Artifact(temp.File("transcript.json"), HashB), default);
+        job = await store.MarkNeedsAttentionAsync(
+            request.JobId,
+            job.Revision,
+            ProcessingState.Transcribing,
+            CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed,
+            default);
+
+        var completed = await store.CompleteTranscriptOnlyAsync(request.JobId, job.Revision, default);
+
+        Assert.Equal(ProcessingState.Completed, completed.State);
+        Assert.Null(completed.FailedStage);
+        Assert.Null(completed.ErrorCode);
+        Assert.True(completed.TranscriptCommitted);
+    }
+
+    [Fact]
     public async Task Package_and_assignments_roll_back_together_on_late_failure()
     {
         using var temp = new TestDirectory();

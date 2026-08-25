@@ -56,6 +56,22 @@ public sealed class ProcessingDomainTests
     }
 
     [Fact]
+    public void Transcript_only_completion_requires_committed_transcript()
+    {
+        var job = ProcessingJob.Start(Guid.NewGuid(), Guid.NewGuid(), deleteVideo: true, StartedAt);
+        job.TransitionTo(ProcessingState.PreparingAudio, StartedAt.AddSeconds(1));
+        job.TransitionTo(ProcessingState.Transcribing, StartedAt.AddSeconds(2));
+
+        Assert.Throws<InvalidProcessingTransitionException>(() =>
+            job.CompleteTranscriptOnly(StartedAt.AddSeconds(3)));
+
+        job.MarkTranscriptCommitted(StartedAt.AddSeconds(3));
+        job.CompleteTranscriptOnly(StartedAt.AddSeconds(4));
+
+        Assert.Equal(ProcessingState.Completed, job.State);
+    }
+
+    [Fact]
     public void Needs_attention_records_a_closed_error_identifier_and_retries_failed_stage()
     {
         var job = NewJob();

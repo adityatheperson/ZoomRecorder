@@ -213,26 +213,15 @@ public sealed class ProcessingCoordinator
             if (job.State == ProcessingState.Transcribing)
             {
                 job = await TranscribeAsync(job, cancellationToken);
-                job = await PersistAsync(() => jobs.MoveAsync(
-                    jobId, job.Revision, ProcessingState.Transcribing, ProcessingState.GeneratingStudyPackage,
-                    CancellationToken.None));
-                await PublishAsync(job, cancellationToken);
             }
 
-            if (job.State == ProcessingState.GeneratingStudyPackage)
+            if (job.State is ProcessingState.Transcribing or ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide)
             {
-                job = await GenerateLectureAsync(job, cancellationToken);
-                job = await PersistAsync(() => jobs.MoveAsync(
-                    jobId, job.Revision, ProcessingState.GeneratingStudyPackage, ProcessingState.UpdatingClassGuide,
-                    CancellationToken.None));
+                job = await PersistAsync(() => jobs.CompleteTranscriptOnlyAsync(
+                    jobId, job.Revision, CancellationToken.None));
                 await PublishAsync(job, cancellationToken);
-            }
-
-            if (job.State == ProcessingState.UpdatingClassGuide)
-            {
-                job = await UpdateGuideAsync(job, cancellationToken);
-                await PublishAsync(job, cancellationToken);
-                await HandleVideoDeletionAsync(job, cancellationToken);
+                await CleanupAsync(job, cancellationToken);
+                return;
             }
         }
         catch (ProcessingConcurrencyException)
@@ -335,6 +324,8 @@ public sealed class ProcessingCoordinator
             await PublishAsync(job, cancellationToken);
         }
 
+        var activity = new CallbackProgress<TranscriptionActivity>(item =>
+            PublishTranscriptionActivity(job.Request.JobId, item));
         var checkpoints = (await jobs.ListTranscriptChunksAsync(job.Request.JobId, cancellationToken))
             .ToDictionary(item => item.Index);
         var results = new List<TranscriptChunk>(chunks.Count);
@@ -355,7 +346,7 @@ public sealed class ProcessingCoordinator
             if (result is null)
             {
                 result = await CallAsync(
-                    () => transcription.TranscribeAsync(chunk, cancellationToken),
+                    () => transcription.TranscribeAsync(chunk, activity, cancellationToken),
                     CloudProcessingErrorCode.TranscriptionUnavailable,
                     cancellationToken);
                 var artifact = await PersistAsync(() => artifacts.WriteJobArtifactAsync(
@@ -594,6 +585,26 @@ public sealed class ProcessingCoordinator
             chunks.Count,
             job.GuideOutcome,
             job.ErrorCode);
+        PublishProgress(progress);
+    }
+
+    private void PublishTranscriptionActivity(Guid jobId, TranscriptionActivity activity)
+    {
+        ArgumentNullException.ThrowIfNull(activity);
+        PublishProgress(new ProcessingProgress(
+            jobId: jobId,
+            state: ProcessingState.Transcribing,
+            completedChunks: 0,
+            totalChunks: 0,
+            guideOutcome: ClassGuideOutcome.NotAttempted,
+            errorCode: null,
+            transcriptionActivity: activity,
+            activityCompletedBytes: activity.CompletedBytes,
+            activityTotalBytes: activity.TotalBytes));
+    }
+
+    private void PublishProgress(ProcessingProgress progress)
+    {
         var handlers = ProgressChanged?.GetInvocationList();
         if (handlers is null)
         {
@@ -611,6 +622,11 @@ public sealed class ProcessingCoordinator
                 // Progress observers cannot affect durable processing.
             }
         }
+    }
+
+    private sealed class CallbackProgress<T>(Action<T> callback) : IProgress<T>
+    {
+        public void Report(T value) => callback(value);
     }
 
     private async Task<T?> ReadAsync<T>(ArtifactCheckpoint checkpoint, CancellationToken cancellationToken)

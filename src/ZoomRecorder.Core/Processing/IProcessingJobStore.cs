@@ -52,7 +52,10 @@ public sealed class ProcessingProgress(
     int completedChunks,
     int totalChunks,
     ClassGuideOutcome guideOutcome,
-    CloudProcessingErrorCode? errorCode) : EventArgs
+    CloudProcessingErrorCode? errorCode,
+    TranscriptionActivity? transcriptionActivity = null,
+    long? activityCompletedBytes = null,
+    long? activityTotalBytes = null) : EventArgs
 {
     public Guid JobId { get; } = jobId;
     public ProcessingState State { get; } = state;
@@ -60,6 +63,9 @@ public sealed class ProcessingProgress(
     public int TotalChunks { get; } = totalChunks;
     public ClassGuideOutcome GuideOutcome { get; } = guideOutcome;
     public CloudProcessingErrorCode? ErrorCode { get; } = errorCode;
+    public TranscriptionActivity? TranscriptionActivity { get; } = transcriptionActivity;
+    public long? ActivityCompletedBytes { get; } = activityCompletedBytes;
+    public long? ActivityTotalBytes { get; } = activityTotalBytes;
     public bool GuideUpdatePending => GuideOutcome == ClassGuideOutcome.Pending;
     public bool CanRetryGuide => State == ProcessingState.Completed && GuideUpdatePending;
 }
@@ -103,6 +109,11 @@ public interface IProcessingJobStore
         Guid jobId,
         long expectedRevision,
         ArtifactCheckpoint transcript,
+        CancellationToken cancellationToken);
+
+    Task<ProcessingJobSnapshot> CompleteTranscriptOnlyAsync(
+        Guid jobId,
+        long expectedRevision,
         CancellationToken cancellationToken);
 
     Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
@@ -211,6 +222,11 @@ public sealed class ProcessingOperationException : Exception
         CloudProcessingErrorCode.StorageCommitFailed => "Processing progress could not be saved. Try again.",
         CloudProcessingErrorCode.CredentialUnavailable => "Cloud credentials are unavailable. Update them and try again.",
         CloudProcessingErrorCode.VideoRecycleFailed => "The completed video could not be moved to the Recycle Bin.",
+        CloudProcessingErrorCode.ModelDownloadFailed => "The local transcription model could not be downloaded. Check your connection and try again.",
+        CloudProcessingErrorCode.ModelVerificationFailed => "The local transcription model could not be verified. Delete the downloaded model and try again.",
+        CloudProcessingErrorCode.LocalAudioConversionFailed => "The recording audio could not be converted for local transcription. Check available disk space and try again.",
+        CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed => "Local transcription could not run. Restart the app and try again.",
+        CloudProcessingErrorCode.LocalTranscriptionOutputInvalid => "Local transcription produced invalid output. Try again; if it persists, reinstall the local transcription model.",
         _ => "Processing could not be completed. Try again."
     };
 }

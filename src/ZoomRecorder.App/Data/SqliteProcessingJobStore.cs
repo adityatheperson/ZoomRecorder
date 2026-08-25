@@ -257,6 +257,49 @@ public sealed class SqliteProcessingJobStore : IProcessingJobStore
         }, cancellationToken);
     }
 
+    public Task<ProcessingJobSnapshot> CompleteTranscriptOnlyAsync(
+        Guid jobId,
+        long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ValidateId(jobId, nameof(jobId));
+        ValidateRevision(expectedRevision);
+        return WithTransactionAsync(async (connection, transaction) =>
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE processing_jobs
+                SET state = $completed,
+                    failed_stage = NULL,
+                    error_code = NULL,
+                    revision = revision + 1,
+                    updated_at = $updatedAt
+                WHERE id = $jobId
+                  AND revision = $expectedRevision
+                  AND transcript_committed = 1
+                  AND (
+                    state IN ($transcribing, $generating, $updating)
+                    OR (state = $needsAttention AND failed_stage IN ($transcribing, $generating, $updating))
+                  );
+                """;
+            command.Parameters.AddWithValue("$completed", StateText(ProcessingState.Completed));
+            command.Parameters.AddWithValue("$updatedAt", TimestampText(utcNow()));
+            command.Parameters.AddWithValue("$jobId", GuidText(jobId));
+            command.Parameters.AddWithValue("$expectedRevision", expectedRevision);
+            command.Parameters.AddWithValue("$transcribing", StateText(ProcessingState.Transcribing));
+            command.Parameters.AddWithValue("$generating", StateText(ProcessingState.GeneratingStudyPackage));
+            command.Parameters.AddWithValue("$updating", StateText(ProcessingState.UpdatingClassGuide));
+            command.Parameters.AddWithValue("$needsAttention", StateText(ProcessingState.NeedsAttention));
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                throw new ProcessingConcurrencyException(jobId);
+            }
+
+            return await ReadJobAsync(connection, transaction, jobId, cancellationToken);
+        }, cancellationToken);
+    }
+
     public Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
         Guid jobId,
         long expectedRevision,

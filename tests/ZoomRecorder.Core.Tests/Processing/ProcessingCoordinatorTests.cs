@@ -23,22 +23,51 @@ public sealed class ProcessingCoordinatorTests
         var job = await fixture.Store.LoadAsync(JobId, default);
         Assert.Equal(ProcessingState.Completed, job.State);
         Assert.True(job.TranscriptCommitted);
-        Assert.True(job.LecturePackageCommitted);
-        Assert.True(job.AssignmentsCommitted);
-        Assert.Equal(ClassGuideOutcome.Succeeded, job.GuideOutcome);
+        Assert.False(job.LecturePackageCommitted);
+        Assert.False(job.AssignmentsCommitted);
+        Assert.Equal(ClassGuideOutcome.NotAttempted, job.GuideOutcome);
         Assert.Equal([0, 1], fixture.Transcriber.RequestedChunkIndexes);
-        Assert.Equal(1, fixture.Generator.LectureCalls);
-        Assert.Equal(1, fixture.Generator.GuideCalls);
+        Assert.Equal(0, fixture.Generator.LectureCalls);
+        Assert.Equal(0, fixture.Generator.GuideCalls);
+        Assert.Equal(0, fixture.Recycler.Calls);
         Assert.Equal(
             [
                 ProcessingState.PreparingAudio,
                 ProcessingState.Transcribing,
-                ProcessingState.GeneratingStudyPackage,
-                ProcessingState.UpdatingClassGuide,
                 ProcessingState.Completed
             ],
             progress.Select(item => item.State).Distinct());
         Assert.False(progress[^1].GuideUpdatePending);
+    }
+
+    [Fact]
+    public async Task Transcript_only_run_stops_after_transcript_and_preserves_video()
+    {
+        using var fixture = new Fixture();
+
+        await fixture.Coordinator.StartAsync(fixture.Request, CancellationToken.None);
+
+        var job = await fixture.Store.LoadAsync(JobId, default);
+        Assert.Equal(ProcessingState.Completed, job.State);
+        Assert.True(job.TranscriptCommitted);
+        Assert.Equal(0, fixture.Generator.LectureCalls);
+        Assert.Equal(0, fixture.Generator.GuideCalls);
+    }
+
+    [Fact]
+    public async Task Transcription_activity_is_published_for_its_own_job()
+    {
+        using var fixture = new Fixture();
+        var progress = new List<ProcessingProgress>();
+        fixture.Coordinator.ProgressChanged += (_, item) => progress.Add(item);
+
+        await fixture.Coordinator.StartAsync(fixture.Request, CancellationToken.None);
+
+        var activity = progress.First(item => item.TranscriptionActivity is not null);
+        Assert.Equal(JobId, activity.JobId);
+        Assert.Equal(TranscriptionActivityKind.Transcribing, activity.TranscriptionActivity!.Kind);
+        Assert.Equal(12, activity.ActivityCompletedBytes);
+        Assert.Equal(24, activity.ActivityTotalBytes);
     }
 
     [Fact]
@@ -131,50 +160,6 @@ public sealed class ProcessingCoordinatorTests
     }
 
     [Fact]
-    public async Task Lecture_generation_failure_preserves_the_previous_package_and_the_mp4()
-    {
-        using var fixture = new Fixture();
-        var previous = fixture.Artifacts.StoreRecordingPackage(RecordingId, FakeStudyGenerationClient.Package());
-        fixture.Store.SeedLecturePackage(previous);
-        fixture.Generator.FailLecture = true;
-        var mp4Path = fixture.Request.Mp4Path;
-
-        var failure = await Assert.ThrowsAsync<ProcessingOperationException>(() =>
-            fixture.Coordinator.StartAsync(fixture.Request, default));
-
-        Assert.Equal(CloudProcessingErrorCode.StudyGenerationUnavailable, failure.Code);
-        Assert.Equal(
-            [previous],
-            await fixture.Store.ListLecturePackageArtifactsAsync(ClassId, default));
-        Assert.Equal(mp4Path, fixture.Request.Mp4Path);
-    }
-
-    [Fact]
-    public async Task Guide_failure_completes_with_pending_outcome_and_retries_without_other_paid_calls()
-    {
-        using var fixture = new Fixture();
-        fixture.Generator.FailGuide = true;
-
-        await fixture.Coordinator.StartAsync(fixture.Request, default);
-
-        var completed = await fixture.Store.LoadAsync(JobId, default);
-        Assert.Equal(ProcessingState.Completed, completed.State);
-        Assert.Equal(ClassGuideOutcome.Pending, completed.GuideOutcome);
-        Assert.True(completed.IsDeletionEligible);
-        Assert.Equal(1, fixture.Generator.LectureCalls);
-        Assert.Equal(1, fixture.Generator.GuideCalls);
-
-        fixture.Generator.FailGuide = false;
-        await fixture.Coordinator.RetryGuideAsync(JobId, default);
-
-        var retried = await fixture.Store.LoadAsync(JobId, default);
-        Assert.Equal(ClassGuideOutcome.Succeeded, retried.GuideOutcome);
-        Assert.Equal(1, fixture.Generator.LectureCalls);
-        Assert.Equal(2, fixture.Generator.GuideCalls);
-        Assert.Equal([0, 1], fixture.Transcriber.RequestedChunkIndexes);
-    }
-
-    [Fact]
     public async Task Audio_preparer_paths_must_be_direct_children_of_the_registered_job_directory()
     {
         using var fixture = new Fixture();
@@ -219,31 +204,9 @@ public sealed class ProcessingCoordinatorTests
         Assert.Equal(ProcessingState.Transcribing, (await fixture.Store.LoadAsync(JobId, default)).State);
     }
 
-    [Fact]
-    public async Task Retry_guide_participates_in_the_job_active_operation_guard()
-    {
-        using var fixture = new Fixture();
-        fixture.Generator.FailGuide = true;
-        await fixture.Coordinator.StartAsync(fixture.Request, default);
-        fixture.Generator.FailGuide = false;
-        fixture.Artifacts.BlockWriteContaining = "class-guide-";
-
-        var retry = fixture.Coordinator.RetryGuideAsync(JobId, default);
-        await fixture.Artifacts.WriteBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        await Assert.ThrowsAsync<ProcessingConcurrencyException>(() =>
-            fixture.Coordinator.ResumeAsync(JobId, default));
-
-        fixture.Artifacts.ReleaseBlockedWrite.TrySetResult();
-        await retry;
-        Assert.Equal(ClassGuideOutcome.Succeeded, (await fixture.Store.LoadAsync(JobId, default)).GuideOutcome);
-    }
-
     [Theory]
     [InlineData(ProcessingState.PreparingAudio)]
     [InlineData(ProcessingState.Transcribing)]
-    [InlineData(ProcessingState.GeneratingStudyPackage)]
-    [InlineData(ProcessingState.UpdatingClassGuide)]
     public async Task Caller_cancellation_at_each_external_stage_records_cancelled_and_preserves_mp4(
         ProcessingState stage)
     {
@@ -349,13 +312,17 @@ public sealed class ProcessingCoordinatorTests
             Audio = new FakeAudioChunkPreparer(Artifacts, Request.JobDirectory);
             Transcriber = new FakeTranscriptionClient();
             Generator = new FakeStudyGenerationClient();
+            Recycler = new FakeVideoRecycler();
+            VideoDeletion = new FakeVideoDeletionStore();
             Coordinator = new ProcessingCoordinator(
                 Store,
                 Audio,
                 Transcriber,
                 Generator,
                 Artifacts,
-                maxChunkBytes: 24 * 1024 * 1024);
+                maxChunkBytes: 24 * 1024 * 1024,
+                Recycler,
+                VideoDeletion);
         }
 
         internal ProcessingRequest Request { get; }
@@ -364,6 +331,8 @@ public sealed class ProcessingCoordinatorTests
         internal FakeAudioChunkPreparer Audio { get; }
         internal FakeTranscriptionClient Transcriber { get; }
         internal FakeStudyGenerationClient Generator { get; }
+        internal FakeVideoRecycler Recycler { get; }
+        internal FakeVideoDeletionStore VideoDeletion { get; }
         internal ProcessingCoordinator Coordinator { get; }
 
         internal void CancelAt(ProcessingState stage, CancellationTokenSource cancellation)
@@ -494,6 +463,17 @@ public sealed class ProcessingCoordinatorTests
             {
                 TranscriptCommitted = true,
                 TranscriptArtifact = transcript
+            }, cancellationToken);
+
+        public Task<ProcessingJobSnapshot> CompleteTranscriptOnlyAsync(
+            Guid jobId,
+            long expectedRevision,
+            CancellationToken cancellationToken) =>
+            Mutate(jobId, expectedRevision, Required(jobId).State, current => current with
+            {
+                State = ProcessingState.Completed,
+                FailedStage = null,
+                ErrorCode = null
             }, cancellationToken);
 
         public Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
@@ -788,12 +768,19 @@ public sealed class ProcessingCoordinatorTests
         internal int? FailIndex { get; set; }
         internal Action? OnCall { get; set; }
 
-        public Task<TranscriptChunk> TranscribeAsync(AudioChunk chunk, CancellationToken cancellationToken)
+        public Task<TranscriptChunk> TranscribeAsync(
+            AudioChunk chunk,
+            IProgress<TranscriptionActivity>? progress,
+            CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             OnCall?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
             RequestedChunkIndexes.Add(chunk.Index);
+            progress?.Report(new TranscriptionActivity(
+                TranscriptionActivityKind.Transcribing,
+                CompletedBytes: 12,
+                TotalBytes: 24));
             if (FailIndex == chunk.Index)
             {
                 throw new InvalidOperationException("raw provider secret must not escape");
@@ -808,6 +795,24 @@ public sealed class ProcessingCoordinatorTests
         }
 
         internal void ResetRequests() => RequestedChunkIndexes.Clear();
+    }
+
+    private sealed class FakeVideoRecycler : IVideoRecycler
+    {
+        internal int Calls { get; private set; }
+
+        public Task<RecycleResult> RecycleAsync(string path, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.FromResult(new RecycleResult(Recycled: true, RecycledPath: path));
+        }
+    }
+
+    private sealed class FakeVideoDeletionStore : IVideoDeletionStore
+    {
+        public Task MarkVideoUnavailableAsync(Guid recordingId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeStudyGenerationClient : IStudyGenerationClient
