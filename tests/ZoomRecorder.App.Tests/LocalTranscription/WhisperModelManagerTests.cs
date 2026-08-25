@@ -108,7 +108,9 @@ public sealed class WhisperModelManagerTests
     public async Task Quarantines_a_corrupt_cached_model_before_downloading_a_replacement()
     {
         using var fixture = ModelFixture.ValidPayload();
-        await File.WriteAllBytesAsync(fixture.FinalModelPath, [0x99, 0x88]);
+        await File.WriteAllBytesAsync(
+            fixture.FinalModelPath,
+            Enumerable.Repeat((byte)0x99, fixture.Payload.Length).ToArray());
 
         var modelPath = await fixture.Manager.EnsureModelAsync(null, CancellationToken.None);
 
@@ -121,7 +123,7 @@ public sealed class WhisperModelManagerTests
     public async Task Rejects_a_download_with_a_hash_mismatch_without_publishing_it()
     {
         using var fixture = ModelFixture.ValidPayload();
-        fixture.Handler.Payload = [0x01, 0x02, 0x03];
+        fixture.Handler.Payload = Enumerable.Repeat((byte)0x01, fixture.Payload.Length).ToArray();
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => fixture.Manager.EnsureModelAsync(null, CancellationToken.None));
@@ -149,12 +151,82 @@ public sealed class WhisperModelManagerTests
     public async Task Concurrent_callers_share_one_verified_download()
     {
         using var fixture = ModelFixture.ValidPayload();
+        fixture.Handler.BlockUntilReleased = true;
         var first = fixture.Manager.EnsureModelAsync(null, CancellationToken.None);
+        await fixture.Handler.WaitForRequestAsync();
         var second = fixture.Manager.EnsureModelAsync(null, CancellationToken.None);
 
+        Assert.Equal(1, fixture.Handler.RequestCount);
+        Assert.False(File.Exists(fixture.FinalModelPath));
+        fixture.Handler.ReleaseBody();
         Assert.Equal(await first, await second);
         Assert.Equal(1, fixture.Handler.RequestCount);
         Assert.True(File.Exists(fixture.FinalModelPath));
+    }
+
+    [Fact]
+    public async Task First_caller_can_cancel_while_a_later_caller_keeps_the_shared_download_alive()
+    {
+        using var fixture = ModelFixture.ValidPayload();
+        fixture.Handler.BlockUntilReleased = true;
+        using var firstCancellation = new CancellationTokenSource();
+
+        var first = fixture.Manager.EnsureModelAsync(null, firstCancellation.Token);
+        await fixture.Handler.WaitForRequestAsync();
+        var second = fixture.Manager.EnsureModelAsync(null, CancellationToken.None);
+        firstCancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        fixture.Handler.ReleaseBody();
+
+        Assert.Equal(fixture.FinalModelPath, await second);
+        Assert.Equal(1, fixture.Handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task Later_caller_can_cancel_while_the_first_caller_keeps_the_shared_download_alive()
+    {
+        using var fixture = ModelFixture.ValidPayload();
+        fixture.Handler.BlockUntilReleased = true;
+        using var laterCancellation = new CancellationTokenSource();
+
+        var first = fixture.Manager.EnsureModelAsync(null, CancellationToken.None);
+        await fixture.Handler.WaitForRequestAsync();
+        var second = fixture.Manager.EnsureModelAsync(null, laterCancellation.Token);
+        laterCancellation.Cancel();
+
+        var completed = await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(1)));
+        fixture.Handler.ReleaseBody();
+        Assert.Same(second, completed);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+
+        Assert.Equal(fixture.FinalModelPath, await first);
+        Assert.Equal(1, fixture.Handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task Concurrent_callers_each_receive_download_progress()
+    {
+        using var fixture = ModelFixture.ValidPayload();
+        fixture.Handler.BlockUntilReleased = true;
+        var firstReports = new List<ModelDownloadProgress>();
+        var secondReports = new List<ModelDownloadProgress>();
+
+        var first = fixture.Manager.EnsureModelAsync(
+            new DelegateProgress<ModelDownloadProgress>(firstReports.Add),
+            CancellationToken.None);
+        await fixture.Handler.WaitForRequestAsync();
+        var second = fixture.Manager.EnsureModelAsync(
+            new DelegateProgress<ModelDownloadProgress>(secondReports.Add),
+            CancellationToken.None);
+        fixture.Handler.ReleaseBody();
+
+        await Task.WhenAll(first, second);
+
+        Assert.NotEmpty(firstReports);
+        Assert.NotEmpty(secondReports);
+        Assert.Equal(fixture.Payload.Length, firstReports[^1].CompletedBytes);
+        Assert.Equal(fixture.Payload.Length, secondReports[^1].CompletedBytes);
     }
 
     private sealed class ModelFixture : IDisposable
@@ -209,17 +281,25 @@ public sealed class WhisperModelManagerTests
 
     private sealed class TestHttpHandler(byte[] payload) : HttpMessageHandler
     {
+        private readonly TaskCompletionSource<bool> _requestObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _bodyReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public byte[] Payload { get; set; } = payload;
         public bool BlockAfterFirstResponse { get; set; }
+        public bool BlockUntilReleased { get; set; }
         private int _requestCount;
         public int RequestCount => _requestCount;
+        public Task WaitForRequestAsync() => _requestObserved.Task;
+        public void ReleaseBody() => _bodyReleased.TrySetResult(true);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _requestCount);
-            HttpContent content = BlockAfterFirstResponse
-                ? new BlockingContent(Payload)
-                : new ByteArrayContent(Payload);
+            _requestObserved.TrySetResult(true);
+            HttpContent content = BlockUntilReleased
+                ? new GatedContent(Payload, _bodyReleased.Task)
+                : BlockAfterFirstResponse
+                    ? new BlockingContent(Payload)
+                    : new ByteArrayContent(Payload);
             content.Headers.ContentLength = Payload.Length;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
         }
@@ -268,6 +348,54 @@ public sealed class WhisperModelManagerTests
             }
 
             return ValueTask.FromCanceled<int>(cancellationToken);
+        }
+    }
+
+    private sealed class GatedContent(byte[] payload, Task released) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length)
+        {
+            length = payload.Length;
+            return true;
+        }
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            await released;
+            await stream.WriteAsync(payload);
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new GatedReadStream(payload, released));
+    }
+
+    private sealed class GatedReadStream(byte[] payload, Task released) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => payload.Length;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await released.WaitAsync(cancellationToken);
+            if (_position == payload.Length)
+            {
+                return 0;
+            }
+
+            var bytesRead = Math.Min(buffer.Length, payload.Length - _position);
+            payload.AsMemory(_position, bytesRead).CopyTo(buffer);
+            _position += bytesRead;
+            return bytesRead;
         }
     }
 

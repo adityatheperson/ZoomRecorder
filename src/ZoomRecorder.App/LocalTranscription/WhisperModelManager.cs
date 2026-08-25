@@ -17,7 +17,7 @@ internal sealed class WhisperModelManager : IWhisperModelManager
     private readonly HttpClient _httpClient;
     private readonly WhisperModelManifest _manifest;
     private readonly string _modelsRoot;
-    private Task<string>? _sharedAcquisition;
+    private SharedAcquisition? _sharedAcquisition;
 
     public WhisperModelManager(HttpClient httpClient, WhisperModelManifest manifest, string modelsRoot)
     {
@@ -36,21 +36,46 @@ internal sealed class WhisperModelManager : IWhisperModelManager
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        SharedAcquisition acquisition;
+        long callerId;
         lock (_acquisitionLock)
         {
-            if (_sharedAcquisition is null || _sharedAcquisition.IsCompleted)
+            var startAcquisition = false;
+            if (_sharedAcquisition is null || _sharedAcquisition.Task.IsCompleted)
             {
-                _sharedAcquisition = AcquireAsync(progress, cancellationToken);
+                _sharedAcquisition = new SharedAcquisition();
+                startAcquisition = true;
             }
 
-            return _sharedAcquisition;
+            acquisition = _sharedAcquisition;
+            callerId = acquisition.AddCaller(progress);
+            if (startAcquisition)
+            {
+                acquisition.Task = AcquireAsync(acquisition);
+            }
+        }
+
+        return AwaitForCallerAsync(acquisition, callerId, cancellationToken);
+    }
+
+    private async Task<string> AwaitForCallerAsync(
+        SharedAcquisition acquisition,
+        long callerId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await acquisition.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            RemoveCaller(acquisition, callerId);
         }
     }
 
-    private async Task<string> AcquireAsync(
-        IProgress<ModelDownloadProgress>? progress,
-        CancellationToken cancellationToken)
+    private async Task<string> AcquireAsync(SharedAcquisition acquisition)
     {
+        var cancellationToken = acquisition.Cancellation.Token;
         var finalPath = LocalTranscriptionPaths.GetModelPath(_modelsRoot, _manifest.FileName);
         Directory.CreateDirectory(_modelsRoot);
 
@@ -66,20 +91,23 @@ internal sealed class WhisperModelManager : IWhisperModelManager
                 Quarantine(finalPath, finalPath);
             }
 
-            return await DownloadVerifiedAsync(finalPath, progress, cancellationToken);
+            return await DownloadVerifiedAsync(finalPath, acquisition, cancellationToken);
         }
         finally
         {
             lock (_acquisitionLock)
             {
-                _sharedAcquisition = null;
+                if (ReferenceEquals(_sharedAcquisition, acquisition))
+                {
+                    _sharedAcquisition = null;
+                }
             }
         }
     }
 
     private async Task<string> DownloadVerifiedAsync(
         string finalPath,
-        IProgress<ModelDownloadProgress>? progress,
+        SharedAcquisition acquisition,
         CancellationToken cancellationToken)
     {
         var partialPath = finalPath + "." + Guid.NewGuid().ToString("N") + ".partial";
@@ -116,7 +144,7 @@ internal sealed class WhisperModelManager : IWhisperModelManager
                     await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
                     hasher.AppendData(buffer, 0, bytesRead);
                     completedBytes += bytesRead;
-                    progress?.Report(new ModelDownloadProgress(completedBytes, _manifest.ByteLength));
+                    ReportProgress(acquisition, new ModelDownloadProgress(completedBytes, _manifest.ByteLength));
                 }
 
                 await destination.FlushAsync(cancellationToken);
@@ -180,5 +208,53 @@ internal sealed class WhisperModelManager : IWhisperModelManager
     {
         var quarantinePath = finalPath + ".corrupt-" + Guid.NewGuid().ToString("N");
         File.Move(sourcePath, quarantinePath, overwrite: false);
+    }
+
+    private void RemoveCaller(SharedAcquisition acquisition, long callerId)
+    {
+        lock (_acquisitionLock)
+        {
+            acquisition.RemoveCaller(callerId);
+            if (acquisition.CallerCount == 0 && !acquisition.Task.IsCompleted)
+            {
+                acquisition.Cancellation.Cancel();
+            }
+        }
+    }
+
+    private void ReportProgress(SharedAcquisition acquisition, ModelDownloadProgress progress)
+    {
+        IProgress<ModelDownloadProgress>[] observers;
+        lock (_acquisitionLock)
+        {
+            observers = acquisition.GetProgressObservers();
+        }
+
+        foreach (var observer in observers)
+        {
+            observer.Report(progress);
+        }
+    }
+
+    private sealed class SharedAcquisition
+    {
+        private readonly Dictionary<long, IProgress<ModelDownloadProgress>?> _callers = [];
+        private long _nextCallerId;
+
+        public CancellationTokenSource Cancellation { get; } = new();
+        public Task<string> Task { get; set; } = null!;
+        public int CallerCount => _callers.Count;
+
+        public long AddCaller(IProgress<ModelDownloadProgress>? progress)
+        {
+            var callerId = _nextCallerId++;
+            _callers.Add(callerId, progress);
+            return callerId;
+        }
+
+        public void RemoveCaller(long callerId) => _callers.Remove(callerId);
+
+        public IProgress<ModelDownloadProgress>[] GetProgressObservers() =>
+            _callers.Values.OfType<IProgress<ModelDownloadProgress>>().ToArray();
     }
 }
