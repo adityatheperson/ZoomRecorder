@@ -335,8 +335,8 @@ public sealed partial class MainWindow : Window, IAppNavigator
             await new ProcessingDialog(viewModel) { XamlRoot = RootFrame.XamlRoot }.ShowAsync();
             if (attempted)
             {
-                await _services.RefreshTrackedJobAsync(jobId, CancellationToken.None);
-                if (!viewModel.HasError)
+                var persisted = await _services.TryRefreshTrackedJobAsync(jobId, CancellationToken.None);
+                if (persisted && !viewModel.HasError)
                 {
                     lecture.TranscriptText = await LoadTranscriptTextAsync(recording.Id, CancellationToken.None);
                 }

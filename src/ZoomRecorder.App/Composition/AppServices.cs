@@ -54,9 +54,18 @@ public sealed class AppServices : IAsyncDisposable
     public ProcessingJobSnapshot? FindResumableJob(Guid recordingId) =>
         resumableByRecording.GetValueOrDefault(recordingId);
 
-    public async Task RefreshTrackedJobAsync(Guid jobId, CancellationToken cancellationToken)
+    public async Task<bool> TryRefreshTrackedJobAsync(Guid jobId, CancellationToken cancellationToken)
     {
-        var job = await Jobs.LoadAsync(jobId, cancellationToken);
+        ProcessingJobSnapshot job;
+        try
+        {
+            job = await Jobs.LoadAsync(jobId, cancellationToken);
+        }
+        catch (KeyNotFoundException)
+        {
+            return false;
+        }
+
         if (job.State is ProcessingState.Completed or ProcessingState.Cancelled)
         {
             resumableByRecording.Remove(job.Request.RecordingId);
@@ -65,6 +74,8 @@ public sealed class AppServices : IAsyncDisposable
         {
             resumableByRecording[job.Request.RecordingId] = job;
         }
+
+        return true;
     }
 
     public async Task<string> GetRecordingProcessingStatusAsync(
@@ -147,6 +158,8 @@ public sealed class AppServices : IAsyncDisposable
                 artifacts,
                 NativeAudioChunkPreparer.DefaultMaxBytes);
             var recoveredJobs = await coordinator.RecoverAsync(cancellationToken);
+            recoveredJobs = await CanonicalizeRecoveredJobsAsync(
+                coordinator, recoveredJobs, cancellationToken);
             return new AppServices(
                 database,
                 http,
@@ -172,6 +185,28 @@ public sealed class AppServices : IAsyncDisposable
         var path = Path.Combine(AppContext.BaseDirectory, "Assets", "Whisper", "model-small.en.json");
         using var stream = File.OpenRead(path);
         return WhisperModelManifest.Load(stream);
+    }
+
+    private static async Task<IReadOnlyList<ProcessingJobSnapshot>> CanonicalizeRecoveredJobsAsync(
+        ProcessingCoordinator coordinator,
+        IReadOnlyList<ProcessingJobSnapshot> recoveredJobs,
+        CancellationToken cancellationToken)
+    {
+        var canonical = new List<ProcessingJobSnapshot>();
+        foreach (var group in recoveredJobs.GroupBy(job => job.Request.RecordingId))
+        {
+            var ordered = group
+                .OrderByDescending(job => job.UpdatedAt)
+                .ThenByDescending(job => job.Request.JobId)
+                .ToArray();
+            canonical.Add(ordered[0]);
+            foreach (var superseded in ordered.Skip(1))
+            {
+                await coordinator.CancelAsync(superseded.Request.JobId, cancellationToken);
+            }
+        }
+
+        return canonical;
     }
 
     public async ValueTask DisposeAsync()

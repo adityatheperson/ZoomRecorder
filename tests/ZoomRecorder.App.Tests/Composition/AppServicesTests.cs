@@ -14,6 +14,7 @@ public sealed class AppServicesTests
     {
         using var files = new ServiceFiles();
         var recordingId = Guid.NewGuid();
+        var olderJobId = Guid.NewGuid();
         var jobId = Guid.NewGuid();
         await using (var database = await LibraryDatabase.OpenAsync(files.LibraryPaths.DatabasePath, default))
         {
@@ -24,6 +25,12 @@ public sealed class AppServicesTests
                 recordingId, classRecord.Id, mp4Path, "lecture.mp4", null,
                 DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), 1, true), default);
             var store = new SqliteProcessingJobStore(database);
+            var older = await store.CreateAsync(new ProcessingRequest(
+                olderJobId, recordingId, classRecord.Id, mp4Path,
+                Path.Combine(files.LibraryPaths.JobsRoot, olderJobId.ToString("D")), false), default);
+            await store.MoveAsync(
+                olderJobId, older.Revision, ProcessingState.ReadyToProcess, ProcessingState.PreparingAudio, default);
+            await Task.Delay(20);
             var created = await store.CreateAsync(new ProcessingRequest(
                 jobId, recordingId, classRecord.Id, mp4Path,
                 Path.Combine(files.LibraryPaths.JobsRoot, jobId.ToString("D")), false), default);
@@ -47,6 +54,7 @@ public sealed class AppServicesTests
 
         Assert.Equal(jobId, services.FindResumableJob(recordingId)?.Request.JobId);
         Assert.Equal("Resume transcription", await services.GetRecordingProcessingStatusAsync(recordingId, default));
+        Assert.Equal(ProcessingState.Cancelled, (await services.Jobs.LoadAsync(olderJobId, default)).State);
     }
 
     [Fact]
@@ -84,6 +92,7 @@ public sealed class AppServicesTests
         Assert.Equal(0, vault.Reads);
         Assert.Equal(0, vault.Writes);
         Assert.Equal(0, vault.Deletes);
+        Assert.False(await services.TryRefreshTrackedJobAsync(Guid.NewGuid(), CancellationToken.None));
     }
 
     private sealed class CountingVault : ICredentialVault
