@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <None Update="Assets\ZoomRecorder.ico" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Assets\Whisper\model-small.en.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

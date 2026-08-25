@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "fileName": "ggml-small.en.bin",
+  "downloadUri": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin",
+  "byteLength": 487614201,
+  "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"
+}
