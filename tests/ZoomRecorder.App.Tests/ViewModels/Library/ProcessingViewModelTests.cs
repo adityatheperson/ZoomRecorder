@@ -20,6 +20,11 @@ public sealed class ProcessingViewModelTests
 
         Assert.Equal(0, notice.Calls);
         Assert.Equal(1, starts);
+        Assert.Equal("Transcribe locally", vm.PrimaryActionText);
+        Assert.False(vm.ShowsCloudControls);
+        Assert.False(vm.SupportsVideoDeletion);
+        Assert.Null(vm.EstimatedUploadText);
+        Assert.Null(vm.EstimatedCostText);
     }
 
     [Fact]
@@ -33,6 +38,7 @@ public sealed class ProcessingViewModelTests
         await vm.StartAsync(default);
 
         Assert.False(vm.IsProcessing);
+        Assert.False(vm.IsProgressIndeterminate);
         Assert.True(vm.HasError);
         Assert.Equal("Study materials could not be generated. Try again.", vm.StatusText);
     }
@@ -65,6 +71,7 @@ public sealed class ProcessingViewModelTests
         await vm.StartAsync(default);
 
         Assert.False(vm.IsProcessing);
+        Assert.False(vm.IsProgressIndeterminate);
         Assert.True(vm.HasError);
         Assert.Equal("Processing stopped unexpectedly. Try again.", vm.StatusText);
     }
@@ -136,10 +143,10 @@ public sealed class ProcessingViewModelTests
 
     [Theory]
     [InlineData(ProcessingState.PreparingAudio, "Preparing audio")]
-    [InlineData(ProcessingState.Transcribing, "Transcribing")]
-    [InlineData(ProcessingState.GeneratingStudyPackage, "Creating study materials")]
-    [InlineData(ProcessingState.UpdatingClassGuide, "Updating class guide")]
-    [InlineData(ProcessingState.Completed, "Completed")]
+    [InlineData(ProcessingState.Transcribing, "Transcribing locally")]
+    [InlineData(ProcessingState.GeneratingStudyPackage, "Transcribing locally")]
+    [InlineData(ProcessingState.UpdatingClassGuide, "Transcribing locally")]
+    [InlineData(ProcessingState.Completed, "Transcript ready")]
     [InlineData(ProcessingState.NeedsAttention, "Needs attention")]
     [InlineData(ProcessingState.Cancelled, "Cancelled")]
     public void Progress_uses_stable_user_facing_labels(ProcessingState state, string expected)
@@ -157,7 +164,31 @@ public sealed class ProcessingViewModelTests
         var vm = new ProcessingViewModel("Physics", 1234, false, new NoticePresenter(true), (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
 
         Assert.Null(vm.EstimatedCostText);
-        Assert.Equal("1.2 KB", vm.EstimatedUploadText);
+        Assert.Null(vm.EstimatedUploadText);
+    }
+
+    [Fact]
+    public void Model_download_is_determinate_but_inference_and_cpu_fallback_are_indeterminate()
+    {
+        var vm = new ProcessingViewModel("Physics", null, false, new NoticePresenter(true), (_, _) => Task.CompletedTask, _ => Task.CompletedTask);
+        var jobId = Guid.NewGuid();
+
+        vm.Apply(new ProcessingProgress(jobId, ProcessingState.Transcribing, 0, 1, ClassGuideOutcome.NotAttempted, null,
+            new TranscriptionActivity(TranscriptionActivityKind.AcquiringModel, 25, 100), 25, 100));
+        Assert.Equal("Downloading English transcription model (~500 MB)", vm.StatusText);
+        Assert.False(vm.IsProgressIndeterminate);
+        Assert.Equal(25, vm.ProgressValue);
+        Assert.Equal(100, vm.ProgressMaximum);
+
+        vm.Apply(new ProcessingProgress(jobId, ProcessingState.Transcribing, 0, 1, ClassGuideOutcome.NotAttempted, null,
+            new TranscriptionActivity(TranscriptionActivityKind.Transcribing)));
+        Assert.Equal("Transcribing locally", vm.StatusText);
+        Assert.True(vm.IsProgressIndeterminate);
+
+        vm.Apply(new ProcessingProgress(jobId, ProcessingState.Transcribing, 0, 1, ClassGuideOutcome.NotAttempted, null,
+            new TranscriptionActivity(TranscriptionActivityKind.UsingCpuFallback)));
+        Assert.Equal("Using CPU fallback", vm.StatusText);
+        Assert.True(vm.IsProgressIndeterminate);
     }
 
     [Fact]

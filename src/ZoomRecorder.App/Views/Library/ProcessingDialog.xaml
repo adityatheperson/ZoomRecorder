@@ -2,18 +2,17 @@
     x:Class="ZoomRecorder.App.Views.Library.ProcessingDialog"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Create study materials"
-    PrimaryButtonText="Start processing"
+    Title="Transcribe locally"
+    PrimaryButtonText="{Binding PrimaryActionText}"
     CloseButtonText="Cancel"
     PrimaryButtonClick="StartClicked">
     <StackPanel Width="480" Spacing="12">
-        <InfoBar IsOpen="True" Severity="Informational" Title="Cloud processing"
-                 Message="Meeting audio will be sent to OpenAI only after you start." />
+        <InfoBar IsOpen="True" Severity="Informational" Title="Local transcription"
+                 Message="Audio stays on this computer. The English model downloads once, then works offline." />
         <TextBlock Text="{Binding ClassName}" Style="{ThemeResource SubtitleTextBlockStyle}" />
-        <TextBlock Text="{Binding EstimatedUploadText}" />
-        <TextBlock Text="{Binding EstimatedCostText}" />
-        <CheckBox Content="Delete the MP4 after verified processing" IsChecked="{Binding DeleteVideoAfterSuccess, Mode=TwoWay}" />
-        <ProgressBar IsIndeterminate="{Binding IsProcessing}" />
+        <ProgressBar IsIndeterminate="{Binding IsProgressIndeterminate}"
+                     Value="{Binding ProgressValue}"
+                     Maximum="{Binding ProgressMaximum}" />
         <TextBlock Text="{Binding StatusText}" />
         <InfoBar IsOpen="{Binding HasError}" Severity="Error" Title="Processing stopped"
                  Message="{Binding StatusText}" />

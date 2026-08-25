@@ -36,7 +36,9 @@ public sealed class LectureDetailViewModel : LibraryViewModelBase
         set { if (transcriptText != value) { transcriptText = value; RaisePropertyChanged(); } }
     }
     public bool StudyMaterialsAreStale { get; private set; }
-    public bool CanRefreshStudyMaterials => StudyMaterialsAreStale;
+    public bool StudyMaterialsAvailable => false;
+    public string StudyMaterialsUnavailableText => "Study materials have not been generated.";
+    public bool CanRefreshStudyMaterials => false;
     public bool CanSeekVideo => Recording.VideoAvailable;
     public string? SeekUnavailableText => CanSeekVideo ? null : "The local video was deleted after processing.";
     public string? RecoveryActionText { get; private set; }
@@ -53,21 +55,13 @@ public sealed class LectureDetailViewModel : LibraryViewModelBase
 
     public async Task RefreshStudyMaterialsAsync(CancellationToken cancellationToken)
     {
-        if (!StudyMaterialsAreStale) return;
-        if (!await notice.ConfirmAsync(
-            "Refreshing study materials sends the edited transcript to the cloud. Audio is not transcribed again.",
-            cancellationToken)) return;
-        await refresh(cancellationToken);
-        StudyMaterialsAreStale = false;
-        RaisePropertyChanged(nameof(StudyMaterialsAreStale));
-        RaisePropertyChanged(nameof(CanRefreshStudyMaterials));
+        cancellationToken.ThrowIfCancellationRequested();
+        await Task.CompletedTask;
     }
 
     public void ApplyFailure(CloudProcessingErrorCode errorCode)
     {
-        RecoveryActionText = errorCode == CloudProcessingErrorCode.CredentialUnavailable
-            ? "Check API key"
-            : "Try again";
+        RecoveryActionText = "Try again";
         RaisePropertyChanged(nameof(RecoveryActionText));
         RaisePropertyChanged(nameof(CanOpenSettings));
     }

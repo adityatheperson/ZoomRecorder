@@ -22,7 +22,5 @@ public sealed partial class LectureDetailPage : Page
     private void BackClicked(object sender, RoutedEventArgs args) => back();
     private async void SaveTranscriptClicked(object sender, RoutedEventArgs args) =>
         await viewModel.SaveTranscriptAsync(CancellationToken.None);
-    private async void RefreshClicked(object sender, RoutedEventArgs args) =>
-        await viewModel.RefreshStudyMaterialsAsync(CancellationToken.None);
     private async void ProcessClicked(object sender, RoutedEventArgs args) => await process();
 }

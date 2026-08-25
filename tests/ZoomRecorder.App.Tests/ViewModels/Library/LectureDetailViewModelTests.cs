@@ -7,14 +7,14 @@ namespace ZoomRecorder.App.Tests.ViewModels.Library;
 public sealed class LectureDetailViewModelTests
 {
     [Fact]
-    public void Credential_error_offers_settings_action()
+    public void Local_flow_never_offers_an_api_key_action()
     {
         var vm = Create(videoAvailable: true);
 
         vm.ApplyFailure(CloudProcessingErrorCode.CredentialUnavailable);
 
-        Assert.Equal("Check API key", vm.RecoveryActionText);
-        Assert.True(vm.CanOpenSettings);
+        Assert.Equal("Try again", vm.RecoveryActionText);
+        Assert.False(vm.CanOpenSettings);
     }
 
     [Fact]
@@ -32,11 +32,13 @@ public sealed class LectureDetailViewModelTests
 
         Assert.Equal("Corrected mitosis explanation", saved);
         Assert.True(vm.StudyMaterialsAreStale);
-        Assert.True(vm.CanRefreshStudyMaterials);
+        Assert.False(vm.CanRefreshStudyMaterials);
+        Assert.False(vm.StudyMaterialsAvailable);
+        Assert.Equal("Study materials have not been generated.", vm.StudyMaterialsUnavailableText);
     }
 
     [Fact]
-    public async Task Refresh_requires_cloud_confirmation()
+    public async Task Refresh_is_unavailable_and_never_opens_a_cloud_confirmation()
     {
         var refreshes = 0;
         var notice = new Notice(false);
@@ -51,7 +53,7 @@ public sealed class LectureDetailViewModelTests
         await vm.RefreshStudyMaterialsAsync(default);
 
         Assert.Equal(0, refreshes);
-        Assert.Contains("cloud", notice.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, notice.Calls);
     }
 
     [Fact]
@@ -78,8 +80,10 @@ public sealed class LectureDetailViewModelTests
     private sealed class Notice(bool accepted) : ICloudNoticePresenter
     {
         public string Message { get; private set; } = string.Empty;
+        public int Calls { get; private set; }
         public Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken)
         {
+            Calls++;
             Message = message;
             return Task.FromResult(accepted);
         }

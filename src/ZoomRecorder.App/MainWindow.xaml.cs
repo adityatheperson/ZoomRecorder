@@ -245,11 +245,11 @@ public sealed partial class MainWindow : Window, IAppNavigator
 
     private async Task LoadLectureAsync(int request, RecordingRecord recording)
     {
-        var notice = new WindowCloudNoticePresenter(RootFrame);
+        var notice = new DisabledNoticePresenter();
         var viewModel = new LectureDetailViewModel(
             recording,
             (text, token) => SaveEditedTranscriptAsync(recording, text, token),
-            token => _services.StudyMaterials.RefreshAsync(recording.Id, token),
+            _ => Task.CompletedTask,
             notice);
         try
         {
@@ -294,30 +294,18 @@ public sealed partial class MainWindow : Window, IAppNavigator
         if (recording.ClassId is not { } classId) return;
         var jobId = Guid.NewGuid();
         var jobDirectory = Path.Combine(_services.Paths.JobsRoot, jobId.ToString("D"));
-        var deleteDefault = await _services.Settings.GetDeleteVideoDefaultAsync(CancellationToken.None);
         ProcessingViewModel viewModel = null!;
         viewModel = new ProcessingViewModel(
-            "Selected class", recording.ByteSize, deleteDefault, notice,
-            (deleteVideo, token) => _services.Coordinator.StartAsync(new ProcessingRequest(
-                jobId, recording.Id, classId, recording.FilePath, jobDirectory, deleteVideo), token),
+            "Selected class", null, savedDeleteDefault: false, notice,
+            (_, token) => _services.Coordinator.StartAsync(new ProcessingRequest(
+                jobId, recording.Id, classId, recording.FilePath, jobDirectory, DeleteVideoAfterSuccess: false), token),
             token => _services.Coordinator.CancelAsync(jobId, token),
-            resume: token => _services.Coordinator.ResumeAsync(jobId, token),
-            permanentDelete: async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                File.Delete(Path.GetFullPath(recording.FilePath));
-                await _services.Repository.MarkVideoUnavailableAsync(recording.Id, token);
-            });
+            resume: token => _services.Coordinator.ResumeAsync(jobId, token));
         EventHandler<ProcessingProgress> progress = (_, update) =>
         {
             if (update.JobId == jobId) DispatcherQueue.TryEnqueue(() => viewModel.Apply(update));
         };
-        EventHandler<Guid> recycle = (_, recordingId) =>
-        {
-            if (recordingId == recording.Id) DispatcherQueue.TryEnqueue(viewModel.ApplyRecycleUnavailable);
-        };
         _services.Coordinator.ProgressChanged += progress;
-        _services.Coordinator.VideoRecycleUnavailable += recycle;
         try
         {
             await new ProcessingDialog(viewModel) { XamlRoot = RootFrame.XamlRoot }.ShowAsync();
@@ -325,7 +313,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
         finally
         {
             _services.Coordinator.ProgressChanged -= progress;
-            _services.Coordinator.VideoRecycleUnavailable -= recycle;
         }
     }
 
@@ -504,21 +491,12 @@ public sealed partial class MainWindow : Window, IAppNavigator
         ILibraryRepository Repository,
         RecordingLibraryService Registration);
 
-    private sealed class WindowCloudNoticePresenter(Frame frame) : ICloudNoticePresenter
+    private sealed class DisabledNoticePresenter : ICloudNoticePresenter
     {
-        public async Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken)
+        public Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var dialog = new ContentDialog
-            {
-                XamlRoot = frame.XamlRoot,
-                Title = "Cloud processing",
-                Content = message,
-                PrimaryButtonText = "Continue",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Primary
-            };
-            return await dialog.ShowAsync() == ContentDialogResult.Primary;
+            return Task.FromResult(false);
         }
     }
 }

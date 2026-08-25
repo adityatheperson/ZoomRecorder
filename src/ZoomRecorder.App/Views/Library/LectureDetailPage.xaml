@@ -8,25 +8,24 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <Button Content="Back" Click="BackClicked" />
             <TextBlock Grid.Column="1" Text="{Binding Title}" Style="{ThemeResource TitleTextBlockStyle}" VerticalAlignment="Center" />
-            <Button Grid.Column="2" Content="Create study materials" Style="{ThemeResource AccentButtonStyle}" Click="ProcessClicked" />
-            <Button Grid.Column="3" Content="Refresh study materials" IsEnabled="{Binding CanRefreshStudyMaterials}" Click="RefreshClicked" />
+            <Button Grid.Column="2" Content="Transcribe locally" Style="{ThemeResource AccentButtonStyle}" Click="ProcessClicked" />
         </Grid>
         <TabView Grid.Row="1" Margin="0,18,0,0" IsAddTabButtonVisible="False">
-            <TabViewItem Header="Summary"><TextBox Text="{Binding Summary, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" Padding="16" /></TabViewItem>
-            <TabViewItem Header="Notes"><ListView ItemsSource="{Binding Notes}" DisplayMemberPath="Heading" /></TabViewItem>
+            <TabViewItem Header="Summary"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
+            <TabViewItem Header="Notes"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
             <TabViewItem Header="Transcript">
                 <Grid Padding="16">
                     <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                     <TextBox Text="{Binding TranscriptText, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap" />
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
                         <Button Content="Save transcript" Click="SaveTranscriptClicked" />
-                        <TextBlock Text="Changes make generated study materials stale." VerticalAlignment="Center" />
+                        <TextBlock Text="Saved locally." VerticalAlignment="Center" />
                     </StackPanel>
                 </Grid>
             </TabViewItem>
-            <TabViewItem Header="Key terms"><ListView ItemsSource="{Binding KeyTerms}" DisplayMemberPath="Term" /></TabViewItem>
-            <TabViewItem Header="Assignments"><ListView ItemsSource="{Binding Assignments}" DisplayMemberPath="Description" /></TabViewItem>
-            <TabViewItem Header="Review questions"><ListView ItemsSource="{Binding ReviewQuestions}" DisplayMemberPath="Question" /></TabViewItem>
+            <TabViewItem Header="Key terms"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
+            <TabViewItem Header="Assignments"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
+            <TabViewItem Header="Review questions"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
         </TabView>
     </Grid>
 </Page>

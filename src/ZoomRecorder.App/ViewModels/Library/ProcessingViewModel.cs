@@ -19,6 +19,9 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     private bool hasError;
     private bool canResume;
     private string statusText = "Ready to process";
+    private bool isProgressIndeterminate;
+    private double progressValue;
+    private double progressMaximum = 1;
 
     public ProcessingViewModel(
         string className,
@@ -33,9 +36,9 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(className);
         ClassName = className;
-        EstimatedUploadText = estimatedUploadBytes is { } bytes ? FormatBytes(bytes) : null;
-        EstimatedCostText = estimatedCost is { } cost ? cost.ToString("C4") : null;
-        deleteVideoAfterSuccess = savedDeleteDefault;
+        EstimatedUploadText = null;
+        EstimatedCostText = null;
+        deleteVideoAfterSuccess = false;
         this.notice = notice ?? throw new ArgumentNullException(nameof(notice));
         this.start = start ?? throw new ArgumentNullException(nameof(start));
         this.cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
@@ -44,6 +47,9 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     }
 
     public string ClassName { get; }
+    public string PrimaryActionText => "Transcribe locally";
+    public bool ShowsCloudControls => false;
+    public bool SupportsVideoDeletion => false;
     public string? EstimatedUploadText { get; }
     public string? EstimatedCostText { get; }
     public bool DeleteVideoAfterSuccess
@@ -52,6 +58,9 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         set { if (deleteVideoAfterSuccess != value) { deleteVideoAfterSuccess = value; RaisePropertyChanged(); } }
     }
     public bool IsProcessing => isProcessing;
+    public bool IsProgressIndeterminate => isProgressIndeterminate;
+    public double ProgressValue => progressValue;
+    public double ProgressMaximum => progressMaximum;
     public bool HasError => hasError;
     public string StatusText => statusText;
     public bool PermanentDeleteDecisionPending { get; private set; }
@@ -61,15 +70,17 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         hasError = false;
         statusText = "Starting processing";
         isProcessing = true;
+        isProgressIndeterminate = true;
         RaisePropertyChanged(nameof(HasError));
         RaisePropertyChanged(nameof(StatusText));
         RaisePropertyChanged(nameof(IsProcessing));
+        RaisePropertyChanged(nameof(IsProgressIndeterminate));
         try
         {
             if (canResume && resume is not null)
                 await resume(cancellationToken);
             else
-                await start(DeleteVideoAfterSuccess, cancellationToken);
+                await start(false, cancellationToken);
         }
         catch (ProcessingOperationException error)
         {
@@ -114,38 +125,52 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
             RaisePropertyChanged(nameof(IsProcessing));
             return;
         }
-        statusText = progress.State switch
+        statusText = progress.TranscriptionActivity?.Kind switch
         {
-            ProcessingState.PreparingAudio => "Preparing audio",
-            ProcessingState.Transcribing => "Transcribing",
-            ProcessingState.GeneratingStudyPackage => "Creating study materials",
-            ProcessingState.UpdatingClassGuide => "Updating class guide",
-            ProcessingState.Completed => "Completed",
-            ProcessingState.NeedsAttention => "Needs attention",
-            ProcessingState.Cancelled => "Cancelled",
-            _ => "Ready to process"
+            TranscriptionActivityKind.AcquiringModel => "Downloading English transcription model (~500 MB)",
+            TranscriptionActivityKind.Transcribing => "Transcribing locally",
+            TranscriptionActivityKind.UsingCpuFallback => "Using CPU fallback",
+            _ => progress.State switch
+            {
+                ProcessingState.PreparingAudio => "Preparing audio",
+                ProcessingState.Transcribing => "Transcribing locally",
+                ProcessingState.GeneratingStudyPackage => "Transcribing locally",
+                ProcessingState.UpdatingClassGuide => "Transcribing locally",
+                ProcessingState.Completed => "Transcript ready",
+                ProcessingState.NeedsAttention => "Needs attention",
+                ProcessingState.Cancelled => "Cancelled",
+                _ => "Ready to process"
+            }
         };
+        var completedBytes = progress.ActivityCompletedBytes ?? progress.TranscriptionActivity?.CompletedBytes;
+        var totalBytes = progress.ActivityTotalBytes ?? progress.TranscriptionActivity?.TotalBytes;
         isProcessing = progress.State is ProcessingState.PreparingAudio or ProcessingState.Transcribing or
             ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide;
+        var hasByteProgress = progress.TranscriptionActivity?.Kind == TranscriptionActivityKind.AcquiringModel &&
+            completedBytes is >= 0 && totalBytes is > 0;
+        isProgressIndeterminate = isProcessing && !hasByteProgress;
+        if (hasByteProgress)
+        {
+            progressValue = Math.Min(completedBytes!.Value, totalBytes!.Value);
+            progressMaximum = totalBytes.Value;
+        }
         RaisePropertyChanged(nameof(StatusText));
         RaisePropertyChanged(nameof(IsProcessing));
+        RaisePropertyChanged(nameof(IsProgressIndeterminate));
+        RaisePropertyChanged(nameof(ProgressValue));
+        RaisePropertyChanged(nameof(ProgressMaximum));
     }
 
     private void ApplyFailure(string message)
     {
         statusText = message;
         isProcessing = false;
+        isProgressIndeterminate = false;
         hasError = true;
         RaisePropertyChanged(nameof(StatusText));
         RaisePropertyChanged(nameof(IsProcessing));
+        RaisePropertyChanged(nameof(IsProgressIndeterminate));
         RaisePropertyChanged(nameof(HasError));
     }
 
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes < 0) throw new ArgumentOutOfRangeException(nameof(bytes));
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024d:0.0} KB";
-        return $"{bytes / (1024d * 1024d):0.0} MB";
-    }
 }
