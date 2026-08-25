@@ -14,6 +14,9 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
     private readonly Func<CancellationToken, Task> cancel;
     private readonly Func<CancellationToken, Task>? permanentDelete;
     private readonly Func<CancellationToken, Task>? resume;
+    private readonly object operationGate = new();
+    private CancellationTokenSource? operationCancellation;
+    private TaskCompletionSource? operationCompletion;
     private bool deleteVideoAfterSuccess;
     private bool isProcessing;
     private bool hasError;
@@ -67,6 +70,43 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        CancellationTokenSource scopedCancellation;
+        TaskCompletionSource scopedCompletion;
+        lock (operationGate)
+        {
+            if (operationCompletion is not null)
+            {
+                return;
+            }
+
+            scopedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scopedCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            operationCancellation = scopedCancellation;
+            operationCompletion = scopedCompletion;
+        }
+
+        try
+        {
+            await StartCoreAsync(scopedCancellation.Token);
+        }
+        finally
+        {
+            lock (operationGate)
+            {
+                if (ReferenceEquals(operationCompletion, scopedCompletion))
+                {
+                    operationCancellation = null;
+                    operationCompletion = null;
+                }
+            }
+
+            scopedCancellation.Dispose();
+            scopedCompletion.TrySetResult();
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
         hasError = false;
         statusText = "Starting processing";
         isProcessing = true;
@@ -97,7 +137,25 @@ public sealed class ProcessingViewModel : LibraryViewModelBase
         }
     }
 
-    public Task CancelAsync(CancellationToken cancellationToken) => cancel(cancellationToken);
+    public async Task CancelAsync(CancellationToken cancellationToken)
+    {
+        CancellationTokenSource? scopedCancellation;
+        Task? completion;
+        lock (operationGate)
+        {
+            scopedCancellation = operationCancellation;
+            completion = operationCompletion?.Task;
+        }
+
+        if (scopedCancellation is null || completion is null)
+        {
+            return;
+        }
+
+        scopedCancellation.Cancel();
+        await cancel(cancellationToken);
+        await completion.WaitAsync(cancellationToken);
+    }
 
     public void ApplyRecycleUnavailable()
     {

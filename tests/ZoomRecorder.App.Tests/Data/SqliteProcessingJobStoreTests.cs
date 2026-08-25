@@ -98,6 +98,25 @@ public sealed class SqliteProcessingJobStoreTests
     }
 
     [Fact]
+    public async Task RestartTranscription_clears_the_stale_final_checkpoint_and_preserves_chunk_checkpoints()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "restart-transcription");
+        var store = Store(database);
+        var lateStage = await MoveToCommittedStageAsync(
+            store, request, temp, ProcessingState.GeneratingStudyPackage);
+
+        var restarted = await store.RestartTranscriptionAsync(
+            request.JobId, lateStage.Revision, default);
+
+        Assert.Equal(ProcessingState.Transcribing, restarted.State);
+        Assert.False(restarted.TranscriptCommitted);
+        Assert.Null(restarted.TranscriptArtifact);
+        Assert.Single(await store.ListAudioChunksAsync(request.JobId, default));
+    }
+
+    [Fact]
     public async Task CompleteTranscriptOnly_completes_a_transcript_stage_attention_job_and_clears_failure()
     {
         using var temp = new TestDirectory();

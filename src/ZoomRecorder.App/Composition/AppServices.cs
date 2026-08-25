@@ -11,30 +11,38 @@ public sealed class AppServices : IAsyncDisposable
 {
     private readonly LibraryDatabase database;
     private readonly HttpClient httpClient;
+    private readonly Dictionary<Guid, ProcessingJobSnapshot> resumableByRecording;
 
     private AppServices(
         LibraryDatabase database,
         HttpClient httpClient,
         SqliteLibraryRepository repository,
+        SqliteProcessingJobStore jobs,
         ProcessingCoordinator coordinator,
         ICredentialVault credentialVault,
         IAppSettingsStore settings,
         IProcessingArtifactStore artifacts,
         StudyMaterialMergeService studyMaterials,
-        LibraryPaths paths)
+        LibraryPaths paths,
+        IReadOnlyList<ProcessingJobSnapshot> recoveredJobs)
     {
         this.database = database;
         this.httpClient = httpClient;
         Repository = repository;
+        Jobs = jobs;
         Coordinator = coordinator;
         CredentialVault = credentialVault;
         Settings = settings;
         Artifacts = artifacts;
         StudyMaterials = studyMaterials;
         Paths = paths;
+        resumableByRecording = recoveredJobs
+            .GroupBy(job => job.Request.RecordingId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(job => job.UpdatedAt).First());
     }
 
     public SqliteLibraryRepository Repository { get; }
+    public SqliteProcessingJobStore Jobs { get; }
     public ProcessingCoordinator Coordinator { get; }
     public ICredentialVault CredentialVault { get; }
     public IAppSettingsStore Settings { get; }
@@ -42,6 +50,46 @@ public sealed class AppServices : IAsyncDisposable
     public StudyMaterialMergeService StudyMaterials { get; }
     public LibraryPaths Paths { get; }
     public LibraryDatabase Database => database;
+
+    public ProcessingJobSnapshot? FindResumableJob(Guid recordingId) =>
+        resumableByRecording.GetValueOrDefault(recordingId);
+
+    public async Task RefreshTrackedJobAsync(Guid jobId, CancellationToken cancellationToken)
+    {
+        var job = await Jobs.LoadAsync(jobId, cancellationToken);
+        if (job.State is ProcessingState.Completed or ProcessingState.Cancelled)
+        {
+            resumableByRecording.Remove(job.Request.RecordingId);
+        }
+        else
+        {
+            resumableByRecording[job.Request.RecordingId] = job;
+        }
+    }
+
+    public async Task<string> GetRecordingProcessingStatusAsync(
+        Guid recordingId,
+        CancellationToken cancellationToken)
+    {
+        if (FindResumableJob(recordingId) is { } resumable)
+        {
+            return resumable.State == ProcessingState.NeedsAttention
+                ? "Needs attention"
+                : "Resume transcription";
+        }
+
+        try
+        {
+            var checkpoint = await Repository.GetTranscriptAsync(recordingId, cancellationToken);
+            return await Artifacts.ReadVerifiedAsync(checkpoint, cancellationToken) is null
+                ? "Needs attention"
+                : "Transcript ready";
+        }
+        catch (KeyNotFoundException)
+        {
+            return "Not transcribed";
+        }
+    }
 
     public static async Task<AppServices> CreateAsync(
         LibraryPaths paths,
@@ -98,17 +146,19 @@ public sealed class AppServices : IAsyncDisposable
                 disabledStudyGeneration,
                 artifacts,
                 NativeAudioChunkPreparer.DefaultMaxBytes);
-            await coordinator.RecoverAsync(cancellationToken);
+            var recoveredJobs = await coordinator.RecoverAsync(cancellationToken);
             return new AppServices(
                 database,
                 http,
                 repository,
+                jobs,
                 coordinator,
                 credentialVault,
                 new SqliteAppSettingsStore(database),
                 artifacts,
                 new StudyMaterialMergeService(repository, disabledStudyGeneration, artifacts),
-                paths);
+                paths,
+                recoveredJobs);
         }
         catch
         {

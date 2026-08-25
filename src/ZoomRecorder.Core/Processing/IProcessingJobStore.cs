@@ -116,6 +116,11 @@ public interface IProcessingJobStore
         long expectedRevision,
         CancellationToken cancellationToken);
 
+    Task<ProcessingJobSnapshot> RestartTranscriptionAsync(
+        Guid jobId,
+        long expectedRevision,
+        CancellationToken cancellationToken);
+
     Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
         Guid jobId,
         long expectedRevision,

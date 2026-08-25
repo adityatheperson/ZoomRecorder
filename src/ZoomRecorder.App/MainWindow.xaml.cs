@@ -196,7 +196,9 @@ public sealed partial class MainWindow : Window, IAppNavigator
             return;
         }
 
-        var viewModel = new RecordingsViewModel(library.Repository);
+        var viewModel = new RecordingsViewModel(
+            library.Repository,
+            _services.GetRecordingProcessingStatusAsync);
         await viewModel.LoadAsync(CancellationToken.None);
         if (request == _navigationRequest)
         {
@@ -253,10 +255,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
             notice);
         try
         {
-            var checkpoint = await _services.Repository.GetTranscriptAsync(recording.Id, CancellationToken.None);
-            var bytes = await _services.Artifacts.ReadVerifiedAsync(checkpoint, CancellationToken.None);
-            var transcript = bytes is null ? null : JsonSerializer.Deserialize<Transcript>(bytes.Value.Span);
-            viewModel.TranscriptText = transcript?.Text ?? string.Empty;
+            viewModel.TranscriptText = await LoadTranscriptTextAsync(recording.Id, CancellationToken.None);
         }
         catch (KeyNotFoundException)
         {
@@ -268,7 +267,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
             RootFrame.Content = new LectureDetailPage(
                 viewModel,
                 () => NavigateClassById(recording.ClassId!.Value),
-                () => ShowProcessingAsync(recording, notice));
+                () => ShowProcessingAsync(recording, viewModel, notice));
         }
     }
 
@@ -282,23 +281,48 @@ public sealed partial class MainWindow : Window, IAppNavigator
 
     private async Task SaveEditedTranscriptAsync(RecordingRecord recording, string text, CancellationToken token)
     {
-        var transcript = new Transcript([new TranscriptSegment(0, Math.Max(1, (long)recording.Duration.TotalMilliseconds), text)]);
+        var checkpoint = await _services.Repository.GetTranscriptAsync(recording.Id, token);
+        var bytes = await _services.Artifacts.ReadVerifiedAsync(checkpoint, token)
+            ?? throw new InvalidDataException("The transcript artifact is unavailable.");
+        var original = JsonSerializer.Deserialize<Transcript>(bytes.Span)
+            ?? throw new InvalidDataException("The transcript artifact is invalid.");
+        var transcript = original with { EditedText = text };
         var artifact = await _services.Artifacts.WriteRecordingArtifactAsync(
             recording.Id, $"transcript-edited-{Guid.NewGuid():D}.json",
             JsonSerializer.SerializeToUtf8Bytes(transcript), token);
         await _services.StudyMaterials.SaveEditedTranscriptAsync(recording.Id, artifact, token);
     }
 
-    private async Task ShowProcessingAsync(RecordingRecord recording, ICloudNoticePresenter notice)
+    private async Task ShowProcessingAsync(
+        RecordingRecord recording,
+        LectureDetailViewModel lecture,
+        ICloudNoticePresenter notice)
     {
         if (recording.ClassId is not { } classId) return;
-        var jobId = Guid.NewGuid();
-        var jobDirectory = Path.Combine(_services.Paths.JobsRoot, jobId.ToString("D"));
+        var recovered = _services.FindResumableJob(recording.Id);
+        var jobId = recovered?.Request.JobId ?? Guid.NewGuid();
+        var jobDirectory = recovered?.Request.JobDirectory ??
+            Path.Combine(_services.Paths.JobsRoot, jobId.ToString("D"));
+        var attempted = false;
+        async Task StartOrResumeAsync(bool _, CancellationToken token)
+        {
+            attempted = true;
+            if (recovered is null)
+            {
+                await _services.Coordinator.StartAsync(new ProcessingRequest(
+                    jobId, recording.Id, classId, recording.FilePath, jobDirectory,
+                    DeleteVideoAfterSuccess: false), token);
+            }
+            else
+            {
+                await _services.Coordinator.ResumeAsync(jobId, token);
+            }
+        }
+
         ProcessingViewModel viewModel = null!;
         viewModel = new ProcessingViewModel(
             "Selected class", null, savedDeleteDefault: false, notice,
-            (_, token) => _services.Coordinator.StartAsync(new ProcessingRequest(
-                jobId, recording.Id, classId, recording.FilePath, jobDirectory, DeleteVideoAfterSuccess: false), token),
+            StartOrResumeAsync,
             token => _services.Coordinator.CancelAsync(jobId, token),
             resume: token => _services.Coordinator.ResumeAsync(jobId, token));
         EventHandler<ProcessingProgress> progress = (_, update) =>
@@ -309,6 +333,14 @@ public sealed partial class MainWindow : Window, IAppNavigator
         try
         {
             await new ProcessingDialog(viewModel) { XamlRoot = RootFrame.XamlRoot }.ShowAsync();
+            if (attempted)
+            {
+                await _services.RefreshTrackedJobAsync(jobId, CancellationToken.None);
+                if (!viewModel.HasError)
+                {
+                    lecture.TranscriptText = await LoadTranscriptTextAsync(recording.Id, CancellationToken.None);
+                }
+            }
         }
         finally
         {
@@ -498,5 +530,13 @@ public sealed partial class MainWindow : Window, IAppNavigator
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(false);
         }
+    }
+
+    private async Task<string> LoadTranscriptTextAsync(Guid recordingId, CancellationToken cancellationToken)
+    {
+        var checkpoint = await _services.Repository.GetTranscriptAsync(recordingId, cancellationToken);
+        var bytes = await _services.Artifacts.ReadVerifiedAsync(checkpoint, cancellationToken);
+        var transcript = bytes is null ? null : JsonSerializer.Deserialize<Transcript>(bytes.Value.Span);
+        return transcript?.Text ?? string.Empty;
     }
 }

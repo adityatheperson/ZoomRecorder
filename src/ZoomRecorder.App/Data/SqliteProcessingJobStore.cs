@@ -300,6 +300,45 @@ public sealed class SqliteProcessingJobStore : IProcessingJobStore
         }, cancellationToken);
     }
 
+    public Task<ProcessingJobSnapshot> RestartTranscriptionAsync(
+        Guid jobId,
+        long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        ValidateId(jobId, nameof(jobId));
+        ValidateRevision(expectedRevision);
+        return WithTransactionAsync(async (connection, transaction) =>
+        {
+            var current = await ReadJobAsync(connection, transaction, jobId, cancellationToken);
+            AssertRevision(current, expectedRevision);
+            var failedLateStage = current.State == ProcessingState.NeedsAttention &&
+                current.FailedStage is ProcessingState.Transcribing or
+                    ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide;
+            if (current.State is not (ProcessingState.Transcribing or
+                ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide) && !failedLateStage)
+            {
+                throw new InvalidProcessingTransitionException(current.State, ProcessingState.Transcribing);
+            }
+
+            await using (var delete = connection.CreateCommand())
+            {
+                delete.Transaction = transaction;
+                delete.CommandText = "DELETE FROM processing_transcripts WHERE job_id = $jobId;";
+                delete.Parameters.AddWithValue("$jobId", GuidText(jobId));
+                await delete.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await BumpRevisionAsync(
+                connection,
+                transaction,
+                current,
+                "state = $transcribing, failed_stage = NULL, error_code = NULL, transcript_committed = 0",
+                command => command.Parameters.AddWithValue("$transcribing", StateText(ProcessingState.Transcribing)),
+                cancellationToken);
+            return await ReadJobAsync(connection, transaction, jobId, cancellationToken);
+        }, cancellationToken);
+    }
+
     public Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
         Guid jobId,
         long expectedRevision,

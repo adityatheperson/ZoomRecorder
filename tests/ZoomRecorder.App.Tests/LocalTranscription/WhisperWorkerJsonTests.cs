@@ -24,6 +24,14 @@ public sealed class WhisperWorkerJsonTests
         Assert.Equal(10_000, result.Segments[^1].EndMilliseconds);
     }
 
+    [Fact]
+    public void Accepts_a_zero_duration_segment_allowed_by_the_transcript_contract()
+    {
+        var result = WhisperWorkerJson.Parse(JsonWithSegments((500, 500, "marker")), chunkDurationMs: 1_000);
+
+        Assert.Equal(new TranscriptSegment(500, 500, "marker"), Assert.Single(result.Segments));
+    }
+
     [Theory]
     [InlineData(-1, 100, "text")]
     [InlineData(200, 100, "text")]

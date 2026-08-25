@@ -3,7 +3,7 @@ using ZoomRecorder.Core.Library;
 
 namespace ZoomRecorder.App.ViewModels.Library;
 
-public sealed record RecordingListItem(RecordingRecord Recording)
+public sealed record RecordingListItem(RecordingRecord Recording, string ProcessingStatus = "Not transcribed")
 {
     public Guid Id => Recording.Id;
     public Guid? ClassId => Recording.ClassId;

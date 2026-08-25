@@ -71,6 +71,23 @@ public sealed class ProcessingDomainTests
         Assert.Equal(ProcessingState.Completed, job.State);
     }
 
+    [Fact]
+    public void Edited_transcript_text_round_trips_without_destroying_timestamped_segments()
+    {
+        var segments = new[]
+        {
+            new TranscriptSegment(100, 200, "original one"),
+            new TranscriptSegment(300, 450, "original two")
+        };
+        var transcript = new Transcript(segments) { EditedText = "corrected lecture text" };
+
+        var roundTripped = JsonSerializer.Deserialize<Transcript>(JsonSerializer.Serialize(transcript));
+
+        Assert.NotNull(roundTripped);
+        Assert.Equal(segments, roundTripped.Segments);
+        Assert.Equal("corrected lecture text", roundTripped.Text);
+    }
+
     [Theory]
     [InlineData(ProcessingState.Transcribing)]
     [InlineData(ProcessingState.GeneratingStudyPackage)]

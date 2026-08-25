@@ -2,12 +2,53 @@ using System.Security.Cryptography;
 using ZoomRecorder.App.Composition;
 using ZoomRecorder.App.Data;
 using ZoomRecorder.App.LocalTranscription;
+using ZoomRecorder.Core.Library;
 using ZoomRecorder.Core.Processing;
 
 namespace ZoomRecorder.App.Tests.Composition;
 
 public sealed class AppServicesTests
 {
+    [Fact]
+    public async Task Startup_recovery_retains_the_resumable_job_by_recording()
+    {
+        using var files = new ServiceFiles();
+        var recordingId = Guid.NewGuid();
+        var jobId = Guid.NewGuid();
+        await using (var database = await LibraryDatabase.OpenAsync(files.LibraryPaths.DatabasePath, default))
+        {
+            var repository = new SqliteLibraryRepository(database);
+            var classRecord = await repository.CreateClassAsync("Biology", null, default);
+            var mp4Path = Path.Combine(files.Root, "lecture.mp4");
+            await repository.AddRecordingAsync(new RecordingRecord(
+                recordingId, classRecord.Id, mp4Path, "lecture.mp4", null,
+                DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1), 1, true), default);
+            var store = new SqliteProcessingJobStore(database);
+            var created = await store.CreateAsync(new ProcessingRequest(
+                jobId, recordingId, classRecord.Id, mp4Path,
+                Path.Combine(files.LibraryPaths.JobsRoot, jobId.ToString("D")), false), default);
+            await store.MoveAsync(
+                jobId, created.Revision, ProcessingState.ReadyToProcess, ProcessingState.PreparingAudio, default);
+        }
+
+        var modelBytes = new byte[] { 0x42 };
+        Directory.CreateDirectory(files.Models);
+        await File.WriteAllBytesAsync(Path.Combine(files.Models, "ggml-small.en.bin"), modelBytes);
+        var manifest = new WhisperModelManifest(
+            "ggml-small.en.bin",
+            new Uri("https://huggingface.co/ggerganov/whisper.cpp/resolve/revision/ggml-small.en.bin"),
+            modelBytes.Length,
+            Convert.ToHexString(SHA256.HashData(modelBytes)).ToLowerInvariant());
+        using var http = new HttpClient(new RejectingHandler());
+
+        await using var services = await AppServices.CreateAsync(
+            files.LibraryPaths, http, new CountingVault(), manifest,
+            new LocalTranscriptionPaths(files.Models, files.GpuWorker, files.CpuWorker), default);
+
+        Assert.Equal(jobId, services.FindResumableJob(recordingId)?.Request.JobId);
+        Assert.Equal("Resume transcription", await services.GetRecordingProcessingStatusAsync(recordingId, default));
+    }
+
     [Fact]
     public async Task Transcript_only_composition_uses_local_whisper_without_reading_credentials()
     {

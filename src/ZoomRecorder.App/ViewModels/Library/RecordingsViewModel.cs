@@ -9,12 +9,16 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         "Assignment is unavailable right now. Try again.";
 
     private readonly ILibraryRepository _repository;
+    private readonly Func<Guid, CancellationToken, Task<string>> processingStatus;
     private RecordingListItem? _assignmentRetryItem;
     private string? _assignmentErrorMessage;
 
-    public RecordingsViewModel(ILibraryRepository repository)
+    public RecordingsViewModel(
+        ILibraryRepository repository,
+        Func<Guid, CancellationToken, Task<string>>? processingStatus = null)
     {
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
+        this.processingStatus = processingStatus ?? ((_, _) => Task.FromResult("Not transcribed"));
     }
 
     public ObservableCollection<RecordingListItem> Recordings { get; } = [];
@@ -79,13 +83,19 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
             var recordings = await _repository.ListRecordingsAsync(null, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            var filtered = recordings
+            var ordered = recordings
                 .Where(item => string.IsNullOrWhiteSpace(query) ||
                     item.FileName.Contains(query, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(item => item.RecordedAt)
                 .ThenBy(item => item.Id)
-                .Select(item => new RecordingListItem(item))
                 .ToArray();
+            var filtered = new List<RecordingListItem>(ordered.Length);
+            foreach (var recording in ordered)
+            {
+                filtered.Add(new RecordingListItem(
+                    recording,
+                    await processingStatus(recording.Id, cancellationToken)));
+            }
             Replace(Recordings, filtered);
             CompleteOperation();
         }

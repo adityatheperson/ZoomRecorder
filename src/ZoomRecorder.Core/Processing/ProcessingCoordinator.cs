@@ -217,6 +217,14 @@ public sealed class ProcessingCoordinator
 
             if (job.State is ProcessingState.Transcribing or ProcessingState.GeneratingStudyPackage or ProcessingState.UpdatingClassGuide)
             {
+                if (!await HasValidCommittedTranscriptAsync(job, cancellationToken))
+                {
+                    job = await PersistAsync(() => jobs.RestartTranscriptionAsync(
+                        jobId, job.Revision, CancellationToken.None));
+                    await PublishAsync(job, cancellationToken);
+                    job = await TranscribeAsync(job, cancellationToken);
+                }
+
                 job = await PersistAsync(() => jobs.CompleteTranscriptOnlyAsync(
                     jobId, job.Revision, CancellationToken.None));
                 await PublishAsync(job, CancellationToken.None);
@@ -588,6 +596,37 @@ public sealed class ProcessingCoordinator
         PublishProgress(progress);
     }
 
+    private async Task<bool> HasValidCommittedTranscriptAsync(
+        ProcessingJobSnapshot job,
+        CancellationToken cancellationToken)
+    {
+        if (!job.TranscriptCommitted || job.TranscriptArtifact is not { } checkpoint)
+        {
+            return false;
+        }
+
+        var transcript = await ReadAsync<Transcript>(checkpoint, cancellationToken);
+        if (transcript is null || transcript.SchemaVersion != 1 || transcript.Segments is null)
+        {
+            return false;
+        }
+
+        long previousEnd = 0;
+        foreach (var segment in transcript.Segments)
+        {
+            if (segment is null || segment.StartMilliseconds < previousEnd ||
+                segment.EndMilliseconds < segment.StartMilliseconds ||
+                string.IsNullOrWhiteSpace(segment.Text))
+            {
+                return false;
+            }
+
+            previousEnd = segment.EndMilliseconds;
+        }
+
+        return true;
+    }
+
     private void PublishTranscriptionActivity(Guid jobId, TranscriptionActivity activity)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -658,6 +697,10 @@ public sealed class ProcessingCoordinator
             return await action();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ProcessingOperationException)
         {
             throw;
         }

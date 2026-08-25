@@ -143,6 +143,11 @@ public sealed class ArtifactStoreTests
         var unpublishedResult = Write(jobDirectory, "transcript-chunk-000001.json");
         var partial = Write(jobDirectory, "upload.partial");
         var temporary = Write(jobDirectory, ".artifact.tmp");
+        var localAudio = Write(jobDirectory, "local-audio-0000-deadbeef.wav");
+        var localWhisper = Write(jobDirectory, "local-whisper-0000-deadbeef.json");
+        var localWhisperAttempt = Write(jobDirectory, ".local-whisper-0000-deadbeef-gpu-attempt.json");
+        var unrelatedWav = Write(jobDirectory, "lecture-notes.wav");
+        var unrelatedJson = Write(jobDirectory, "notes.json");
         var unrelated = Write(jobDirectory, "notes.txt");
         var nested = Write(Path.Combine(jobDirectory, "nested"), "nested.partial");
         var sibling = Write(siblingDirectory, "sibling.partial");
@@ -157,6 +162,11 @@ public sealed class ArtifactStoreTests
         Assert.False(File.Exists(unpublishedResult));
         Assert.False(File.Exists(partial));
         Assert.False(File.Exists(temporary));
+        Assert.False(File.Exists(localAudio));
+        Assert.False(File.Exists(localWhisper));
+        Assert.False(File.Exists(localWhisperAttempt));
+        Assert.True(File.Exists(unrelatedWav));
+        Assert.True(File.Exists(unrelatedJson));
         Assert.True(File.Exists(unrelated));
         Assert.True(File.Exists(nested));
         Assert.True(File.Exists(sibling));

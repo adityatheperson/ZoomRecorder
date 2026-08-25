@@ -92,6 +92,39 @@ public sealed class ProcessingViewModelTests
     }
 
     [Fact]
+    public async Task Cancel_signals_the_active_operation_and_waits_for_its_cleanup()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupMayFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanupFinished = false;
+        var cancelCalls = 0;
+        var vm = new ProcessingViewModel(
+            "Biology 101", null, false, new NoticePresenter(true),
+            async (_, token) =>
+            {
+                started.SetResult();
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                finally
+                {
+                    await cleanupMayFinish.Task;
+                    cleanupFinished = true;
+                }
+            },
+            _ => { cancelCalls++; return Task.CompletedTask; });
+
+        var processing = vm.StartAsync(default);
+        await started.Task;
+        var cancelling = vm.CancelAsync(default);
+
+        Assert.False(cancelling.IsCompleted);
+        Assert.Equal(1, cancelCalls);
+        cleanupMayFinish.SetResult();
+        await Task.WhenAll(processing, cancelling);
+        Assert.True(cleanupFinished);
+        Assert.False(vm.IsProcessing);
+    }
+
+    [Fact]
     public async Task Retry_clears_the_previous_error_before_starting_again()
     {
         var retryStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

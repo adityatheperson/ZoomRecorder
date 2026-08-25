@@ -5,6 +5,26 @@ namespace ZoomRecorder.App.Tests.ViewModels.Library;
 
 public sealed class LibraryViewModelTests
 {
+    [Fact]
+    public async Task Recordings_project_library_visible_processing_status()
+    {
+        var repository = new TestLibraryRepository();
+        var ready = Recording("ready.mp4", BiologyId, Now);
+        var resumable = Recording("resume.mp4", ChemistryId, Now.AddMinutes(-1));
+        repository.Recordings.AddRange([ready, resumable]);
+        var viewModel = new RecordingsViewModel(
+            repository,
+            (recordingId, _) => Task.FromResult(recordingId == ready.Id
+                ? "Transcript ready"
+                : "Resume transcription"));
+
+        await viewModel.LoadAsync(CancellationToken.None);
+
+        Assert.Contains(viewModel.Recordings, item =>
+            item.Id == ready.Id && item.ProcessingStatus == "Transcript ready");
+        Assert.Contains(viewModel.Recordings, item =>
+            item.Id == resumable.Id && item.ProcessingStatus == "Resume transcription");
+    }
     private static readonly Guid BiologyId = Guid.Parse("10000000-0000-0000-0000-000000000001");
     private static readonly Guid ChemistryId = Guid.Parse("10000000-0000-0000-0000-000000000002");
     private static readonly DateTimeOffset Now = new(2026, 8, 18, 12, 0, 0, TimeSpan.Zero);

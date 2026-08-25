@@ -24,4 +24,26 @@ public sealed partial class ProcessingDialog : ContentDialog
         }
         finally { deferral.Complete(); }
     }
+
+    private async void CancelClicked(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+    {
+        if (!viewModel.IsProcessing)
+        {
+            return;
+        }
+
+        var deferral = args.GetDeferral();
+        try
+        {
+            await viewModel.CancelAsync(CancellationToken.None);
+        }
+        catch
+        {
+            args.Cancel = true;
+        }
+        finally
+        {
+            deferral.Complete();
+        }
+    }
 }

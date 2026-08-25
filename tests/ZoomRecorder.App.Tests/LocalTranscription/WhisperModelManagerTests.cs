@@ -78,6 +78,34 @@ public sealed class WhisperModelManagerTests
     }
 
     [Fact]
+    public async Task Removes_stale_owned_partial_files_before_acquisition()
+    {
+        using var fixture = ModelFixture.ValidPayload();
+        var stale = fixture.FinalModelPath + ".stale.partial";
+        var foreign = Path.Combine(fixture.ModelsRoot, "other-model.stale.partial");
+        await File.WriteAllTextAsync(stale, "stale");
+        await File.WriteAllTextAsync(foreign, "foreign");
+
+        await fixture.Manager.EnsureModelAsync(null, CancellationToken.None);
+
+        Assert.False(File.Exists(stale));
+        Assert.True(File.Exists(foreign));
+    }
+
+    [Fact]
+    public async Task Rejects_an_overlong_response_from_headers_without_creating_a_partial()
+    {
+        using var fixture = ModelFixture.ValidPayload();
+        fixture.Handler.ReportedContentLength = fixture.Payload.Length + 1;
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => fixture.Manager.EnsureModelAsync(null, CancellationToken.None));
+
+        Assert.Empty(Directory.EnumerateFiles(fixture.ModelsRoot, "*.partial"));
+        Assert.False(File.Exists(fixture.FinalModelPath));
+    }
+
+    [Fact]
     public async Task Verifies_a_cached_model_without_another_request()
     {
         using var fixture = ModelFixture.ValidPayload();
@@ -320,6 +348,7 @@ public sealed class WhisperModelManagerTests
         public bool BlockAfterFirstResponse { get; set; }
         public bool BlockUntilReleased { get; set; }
         public bool DelayCancellationCleanup { get; set; }
+        public long? ReportedContentLength { get; set; }
         private int _requestCount;
         public int RequestCount => _requestCount;
         public Task StreamDisposed => _streamDisposed.Task;
@@ -343,7 +372,7 @@ public sealed class WhisperModelManagerTests
                 : BlockAfterFirstResponse
                     ? new BlockingContent(Payload)
                     : new ByteArrayContent(Payload);
-            content.Headers.ContentLength = Payload.Length;
+            content.Headers.ContentLength = ReportedContentLength ?? Payload.Length;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
         }
     }

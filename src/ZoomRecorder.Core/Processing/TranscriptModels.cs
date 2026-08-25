@@ -22,9 +22,13 @@ public sealed record Transcript([property: JsonRequired] IReadOnlyList<Transcrip
 {
     public int SchemaVersion { get; init; } = 1;
 
+    public string? EditedText { get; init; }
+
     public long StartMilliseconds => Segments.Count == 0 ? 0 : Segments.Min(segment => segment.StartMilliseconds);
 
     public long EndMilliseconds => Segments.Count == 0 ? 0 : Segments.Max(segment => segment.EndMilliseconds);
 
-    public string Text => string.Join(' ', Segments.Select(segment => segment.Text).Where(text => !string.IsNullOrWhiteSpace(text)));
+    public string Text => string.IsNullOrWhiteSpace(EditedText)
+        ? string.Join(' ', Segments.Select(segment => segment.Text).Where(text => !string.IsNullOrWhiteSpace(text)))
+        : EditedText;
 }

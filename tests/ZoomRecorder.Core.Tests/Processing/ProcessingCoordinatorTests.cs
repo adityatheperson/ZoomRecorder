@@ -93,7 +93,7 @@ public sealed class ProcessingCoordinatorTests
     {
         using var fixture = new Fixture();
         await fixture.Store.CreateAsync(fixture.Request, default);
-        fixture.Store.SeedHistoricalLateStage(stage);
+        fixture.Store.SeedHistoricalLateStage(stage, fixture.Artifacts.StoreTranscript(RecordingId, "existing"));
 
         await fixture.Coordinator.ResumeAsync(JobId, default);
 
@@ -101,6 +101,39 @@ public sealed class ProcessingCoordinatorTests
         Assert.Equal(0, fixture.Generator.LectureCalls);
         Assert.Equal(0, fixture.Generator.GuideCalls);
         Assert.Equal(0, fixture.Recycler.Calls);
+    }
+
+    [Theory]
+    [InlineData(ProcessingState.GeneratingStudyPackage)]
+    [InlineData(ProcessingState.UpdatingClassGuide)]
+    public async Task Resume_rebuilds_a_missing_or_corrupt_historical_transcript_before_completion(ProcessingState stage)
+    {
+        using var fixture = new Fixture();
+        await fixture.Store.CreateAsync(fixture.Request, default);
+        var transcript = fixture.Artifacts.StoreTranscript(RecordingId, "corrupt me");
+        fixture.Store.SeedHistoricalLateStage(stage, transcript);
+        fixture.Artifacts.Corrupt(transcript.Path);
+
+        await fixture.Coordinator.ResumeAsync(JobId, default);
+
+        var completed = await fixture.Store.LoadAsync(JobId, default);
+        Assert.Equal(ProcessingState.Completed, completed.State);
+        Assert.True(completed.TranscriptCommitted);
+        Assert.NotEqual(transcript, completed.TranscriptArtifact);
+        Assert.Equal([0, 1], fixture.Transcriber.RequestedChunkIndexes);
+    }
+
+    [Fact]
+    public async Task Resume_rebuilds_an_uncommitted_historical_late_stage_job()
+    {
+        using var fixture = new Fixture();
+        await fixture.Store.CreateAsync(fixture.Request, default);
+        fixture.Store.SeedHistoricalLateStage(ProcessingState.GeneratingStudyPackage, transcript: null);
+
+        await fixture.Coordinator.ResumeAsync(JobId, default);
+
+        Assert.Equal(ProcessingState.Completed, (await fixture.Store.LoadAsync(JobId, default)).State);
+        Assert.Equal([0, 1], fixture.Transcriber.RequestedChunkIndexes);
     }
 
     [Fact]
@@ -191,6 +224,21 @@ public sealed class ProcessingCoordinatorTests
 
         Assert.Equal([0, 1, 1], fixture.Transcriber.RequestedChunkIndexes);
         Assert.True(File.Exists(fixture.Request.Mp4Path));
+    }
+
+    [Fact]
+    public async Task Transcription_preserves_a_specific_processing_error_code()
+    {
+        using var fixture = new Fixture();
+        fixture.Transcriber.ErrorCodeToThrow = CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed;
+
+        var failure = await Assert.ThrowsAsync<ProcessingOperationException>(() =>
+            fixture.Coordinator.StartAsync(fixture.Request, default));
+
+        Assert.Equal(CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed, failure.Code);
+        Assert.Equal(
+            CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed,
+            (await fixture.Store.LoadAsync(JobId, default)).ErrorCode);
     }
 
     [Fact]
@@ -536,6 +584,19 @@ public sealed class ProcessingCoordinatorTests
             return completed;
         }
 
+        public Task<ProcessingJobSnapshot> RestartTranscriptionAsync(
+            Guid jobId,
+            long expectedRevision,
+            CancellationToken cancellationToken) =>
+            Mutate(jobId, expectedRevision, Required(jobId).State, current => current with
+            {
+                State = ProcessingState.Transcribing,
+                FailedStage = null,
+                ErrorCode = null,
+                TranscriptCommitted = false,
+                TranscriptArtifact = null
+            }, cancellationToken);
+
         public Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
             Guid jobId,
             long expectedRevision,
@@ -641,7 +702,7 @@ public sealed class ProcessingCoordinatorTests
             };
         }
 
-        internal void SeedHistoricalLateStage(ProcessingState stage)
+        internal void SeedHistoricalLateStage(ProcessingState stage, ArtifactCheckpoint? transcript)
         {
             if (stage is not ProcessingState.GeneratingStudyPackage and not ProcessingState.UpdatingClassGuide)
             {
@@ -652,7 +713,8 @@ public sealed class ProcessingCoordinatorTests
             job = current with
             {
                 State = stage,
-                TranscriptCommitted = true,
+                TranscriptCommitted = transcript is not null,
+                TranscriptArtifact = transcript,
                 Revision = current.Revision + 1
             };
         }
@@ -771,6 +833,13 @@ public sealed class ProcessingCoordinatorTests
                 JsonSerializer.SerializeToUtf8Bytes(package),
                 CancellationToken.None).GetAwaiter().GetResult();
 
+        internal ArtifactCheckpoint StoreTranscript(Guid recordingId, string text) =>
+            WriteAsync(
+                Path.Combine("recordings", recordingId.ToString("D"), "transcript.json"),
+                JsonSerializer.SerializeToUtf8Bytes(
+                    new Transcript([new TranscriptSegment(0, 1_000, text)])),
+                CancellationToken.None).GetAwaiter().GetResult();
+
         private async Task<ArtifactCheckpoint> WriteAsync(
             string suggestedPath,
             ReadOnlyMemory<byte> content,
@@ -844,6 +913,7 @@ public sealed class ProcessingCoordinatorTests
     {
         internal List<int> RequestedChunkIndexes { get; } = [];
         internal int? FailIndex { get; set; }
+        internal CloudProcessingErrorCode? ErrorCodeToThrow { get; set; }
         internal Action? OnCall { get; set; }
 
         public Task<TranscriptChunk> TranscribeAsync(
@@ -859,6 +929,10 @@ public sealed class ProcessingCoordinatorTests
                 TranscriptionActivityKind.Transcribing,
                 CompletedBytes: 12,
                 TotalBytes: 24));
+            if (ErrorCodeToThrow is { } errorCode)
+            {
+                throw new ProcessingOperationException(errorCode);
+            }
             if (FailIndex == chunk.Index)
             {
                 throw new InvalidOperationException("raw provider secret must not escape");

@@ -47,7 +47,7 @@ internal static class WhisperWorkerJson
                 var start = Milliseconds(offsets.From.Value);
                 var end = Milliseconds(offsets.To.Value);
                 var text = Normalize(item.Text);
-                if (start < 0 || end <= start || start < previousEnd || text.Length == 0)
+                if (start < 0 || end < start || start < previousEnd || text.Length == 0)
                 {
                     throw new InvalidDataException("The Whisper output contains an invalid or unordered segment.");
                 }
@@ -60,7 +60,7 @@ internal static class WhisperWorkerJson
                         throw new InvalidDataException("The Whisper output extends beyond the audio chunk.");
                     }
                     end = chunkDurationMs;
-                    if (end <= start)
+                    if (end < start)
                     {
                         throw new InvalidDataException("Clamping produced an invalid final segment.");
                     }

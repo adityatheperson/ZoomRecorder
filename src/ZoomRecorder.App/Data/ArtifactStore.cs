@@ -231,6 +231,12 @@ public sealed class ArtifactStore : IProcessingArtifactStore
         return name.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) ||
                name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
                name.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith("local-audio-", StringComparison.OrdinalIgnoreCase) &&
+               name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith("local-whisper-", StringComparison.OrdinalIgnoreCase) &&
+               name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith(".local-whisper-", StringComparison.OrdinalIgnoreCase) &&
+               name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ||
                name.StartsWith("transcript-chunk-", StringComparison.OrdinalIgnoreCase) &&
                name.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
     }

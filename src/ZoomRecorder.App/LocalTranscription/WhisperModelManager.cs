@@ -96,6 +96,7 @@ internal sealed class WhisperModelManager : IWhisperModelManager
 
         try
         {
+            RemoveStalePartials(finalPath);
             if (File.Exists(finalPath))
             {
                 if (await IsVerifiedAsync(finalPath, cancellationToken))
@@ -135,6 +136,11 @@ internal sealed class WhisperModelManager : IWhisperModelManager
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
             response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentLength is long contentLength &&
+                contentLength > _manifest.ByteLength)
+            {
+                throw new InvalidDataException("The downloaded Whisper model exceeded its pinned size.");
+            }
 
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
             await using (var destination = new FileStream(
@@ -154,6 +160,11 @@ internal sealed class WhisperModelManager : IWhisperModelManager
                     if (bytesRead == 0)
                     {
                         break;
+                    }
+
+                    if (completedBytes > _manifest.ByteLength - bytesRead)
+                    {
+                        throw new InvalidDataException("The downloaded Whisper model exceeded its pinned size.");
                     }
 
                     await destination.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken);
@@ -223,6 +234,21 @@ internal sealed class WhisperModelManager : IWhisperModelManager
     {
         var quarantinePath = finalPath + ".corrupt-" + Guid.NewGuid().ToString("N");
         File.Move(sourcePath, quarantinePath, overwrite: false);
+    }
+
+    private static void RemoveStalePartials(string finalPath)
+    {
+        var directory = Path.GetDirectoryName(finalPath)!;
+        var prefix = Path.GetFileName(finalPath) + ".";
+        foreach (var path in Directory.EnumerateFiles(directory, Path.GetFileName(finalPath) + ".*.partial"))
+        {
+            var name = Path.GetFileName(path);
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                name.EndsWith(".partial", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(path);
+            }
+        }
     }
 
     private bool RemoveCaller(SharedAcquisition acquisition, long callerId)
