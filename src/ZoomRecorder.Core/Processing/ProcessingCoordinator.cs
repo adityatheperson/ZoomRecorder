@@ -219,8 +219,8 @@ public sealed class ProcessingCoordinator
             {
                 job = await PersistAsync(() => jobs.CompleteTranscriptOnlyAsync(
                     jobId, job.Revision, CancellationToken.None));
-                await PublishAsync(job, cancellationToken);
-                await CleanupAsync(job, cancellationToken);
+                await PublishAsync(job, CancellationToken.None);
+                await CleanupAsync(job, CancellationToken.None);
                 return;
             }
         }

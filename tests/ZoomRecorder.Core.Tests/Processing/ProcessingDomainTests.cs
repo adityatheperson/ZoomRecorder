@@ -71,6 +71,22 @@ public sealed class ProcessingDomainTests
         Assert.Equal(ProcessingState.Completed, job.State);
     }
 
+    [Theory]
+    [InlineData(ProcessingState.Transcribing)]
+    [InlineData(ProcessingState.GeneratingStudyPackage)]
+    [InlineData(ProcessingState.UpdatingClassGuide)]
+    public void Transcript_only_completion_allows_each_committed_active_late_stage(ProcessingState stage)
+    {
+        var job = NewJob();
+        MoveTo(job, stage);
+        job.MarkTranscriptCommitted(StartedAt.AddMinutes(10));
+
+        job.CompleteTranscriptOnly(StartedAt.AddMinutes(11));
+
+        Assert.Equal(ProcessingState.Completed, job.State);
+        Assert.Equal(StartedAt.AddMinutes(11), job.CompletedAt);
+    }
+
     [Fact]
     public void Needs_attention_records_a_closed_error_identifier_and_retries_failed_stage()
     {

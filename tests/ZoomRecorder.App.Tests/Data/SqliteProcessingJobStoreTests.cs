@@ -124,6 +124,165 @@ public sealed class SqliteProcessingJobStoreTests
         Assert.True(completed.TranscriptCommitted);
     }
 
+    [Theory]
+    [InlineData(ProcessingState.Transcribing)]
+    [InlineData(ProcessingState.GeneratingStudyPackage)]
+    [InlineData(ProcessingState.UpdatingClassGuide)]
+    public async Task CompleteTranscriptOnly_completes_each_committed_active_late_stage(ProcessingState stage)
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, $"active-{stage}");
+        var store = Store(database);
+        var job = await MoveToCommittedStageAsync(store, request, temp, stage);
+
+        var completed = await store.CompleteTranscriptOnlyAsync(request.JobId, job.Revision, default);
+
+        Assert.Equal(ProcessingState.Completed, completed.State);
+        Assert.True(completed.TranscriptCommitted);
+        Assert.Null(completed.FailedStage);
+        Assert.Null(completed.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData(ProcessingState.Transcribing)]
+    [InlineData(ProcessingState.GeneratingStudyPackage)]
+    [InlineData(ProcessingState.UpdatingClassGuide)]
+    public async Task CompleteTranscriptOnly_completes_matching_late_stage_attention_jobs(ProcessingState stage)
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, $"attention-{stage}");
+        var store = Store(database);
+        var job = await MoveToCommittedStageAsync(store, request, temp, stage);
+        job = await store.MarkNeedsAttentionAsync(
+            request.JobId,
+            job.Revision,
+            stage,
+            CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed,
+            default);
+
+        var completed = await store.CompleteTranscriptOnlyAsync(request.JobId, job.Revision, default);
+
+        Assert.Equal(ProcessingState.Completed, completed.State);
+        Assert.Null(completed.FailedStage);
+        Assert.Null(completed.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CompleteTranscriptOnly_rejects_an_uncommitted_transcript_without_mutation()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "uncommitted");
+        var store = Store(database);
+        var job = await store.CreateAsync(request, default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.ReadyToProcess, ProcessingState.PreparingAudio, default);
+        job = await store.SaveAudioChunksAsync(request.JobId, job.Revision, [Chunk(request, 0, 0, 10_000, HashA)], default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.PreparingAudio, ProcessingState.Transcribing, default);
+
+        await Assert.ThrowsAsync<ProcessingConcurrencyException>(() =>
+            store.CompleteTranscriptOnlyAsync(request.JobId, job.Revision, default));
+
+        Assert.Equal(job, await store.LoadAsync(request.JobId, default));
+    }
+
+    [Fact]
+    public async Task CompleteTranscriptOnly_rejects_a_stale_revision_without_mutation()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "stale");
+        var store = Store(database);
+        var job = await MoveToCommittedStageAsync(store, request, temp, ProcessingState.Transcribing);
+
+        await Assert.ThrowsAsync<ProcessingConcurrencyException>(() =>
+            store.CompleteTranscriptOnlyAsync(request.JobId, job.Revision - 1, default));
+
+        Assert.Equal(job, await store.LoadAsync(request.JobId, default));
+    }
+
+    [Fact]
+    public async Task CompleteTranscriptOnly_rejects_attention_with_a_mismatched_failed_stage()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "mismatched");
+        var store = Store(database);
+        var job = await MoveToCommittedStageAsync(store, request, temp, ProcessingState.Transcribing);
+        await using (var seed = database.Connection.CreateCommand())
+        {
+            seed.CommandText = """
+                UPDATE processing_jobs
+                SET state = 'NeedsAttention', failed_stage = 'PreparingAudio',
+                    error_code = 'AudioPreparationFailed', revision = revision + 1
+                WHERE id = $jobId;
+                """;
+            seed.Parameters.AddWithValue("$jobId", request.JobId.ToString("D"));
+            await seed.ExecuteNonQueryAsync();
+        }
+        var mismatched = await store.LoadAsync(request.JobId, default);
+
+        await Assert.ThrowsAsync<ProcessingConcurrencyException>(() =>
+            store.CompleteTranscriptOnlyAsync(request.JobId, mismatched.Revision, default));
+
+        Assert.Equal(mismatched, await store.LoadAsync(request.JobId, default));
+    }
+
+    [Fact]
+    public async Task CompleteTranscriptOnly_preserves_existing_study_and_guide_data()
+    {
+        using var temp = new TestDirectory();
+        await using var database = await LibraryDatabase.OpenAsync(temp.DatabasePath, default);
+        var request = await RequestAsync(database, temp, "preserves-data");
+        var store = Store(database);
+        var generating = await MoveToCommittedStageAsync(store, request, temp, ProcessingState.GeneratingStudyPackage);
+        var package = Artifact(temp.File("package.json"), HashC);
+        var committed = await store.CommitLecturePackageAsync(
+            request.JobId, generating.Revision, package, HashA, [Assignment()], default);
+        var updating = await store.MoveAsync(
+            request.JobId,
+            committed.Revision,
+            ProcessingState.GeneratingStudyPackage,
+            ProcessingState.UpdatingClassGuide,
+            default);
+        var guide = Artifact(temp.File("guide.json"), HashB);
+        await using (var seed = database.Connection.CreateCommand())
+        {
+            seed.CommandText = """
+                INSERT INTO class_study_guides(
+                    class_id, schema_version, artifact_path, artifact_sha256,
+                    is_update_pending, updated_at)
+                VALUES ($classId, 1, $path, $hash, 0, $updatedAt);
+                """;
+            seed.Parameters.AddWithValue("$classId", request.ClassId.ToString("D"));
+            seed.Parameters.AddWithValue("$path", guide.Path);
+            seed.Parameters.AddWithValue("$hash", guide.Sha256);
+            seed.Parameters.AddWithValue("$updatedAt", Now.ToString("O"));
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        var completed = await store.CompleteTranscriptOnlyAsync(request.JobId, updating.Revision, default);
+
+        Assert.Equal(ProcessingState.Completed, completed.State);
+        Assert.True(completed.LecturePackageCommitted);
+        Assert.True(completed.AssignmentsCommitted);
+        await using var verify = database.Connection.CreateCommand();
+        verify.CommandText = """
+            SELECT
+                (SELECT artifact_path FROM lecture_packages WHERE recording_id = $recordingId),
+                (SELECT COUNT(*) FROM assignments WHERE recording_id = $recordingId),
+                (SELECT artifact_path FROM class_study_guides WHERE class_id = $classId);
+            """;
+        verify.Parameters.AddWithValue("$recordingId", request.RecordingId.ToString("D"));
+        verify.Parameters.AddWithValue("$classId", request.ClassId.ToString("D"));
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(package.Path, reader.GetString(0));
+        Assert.Equal(1L, reader.GetInt64(1));
+        Assert.Equal(guide.Path, reader.GetString(2));
+    }
+
     [Fact]
     public async Task Package_and_assignments_roll_back_together_on_late_failure()
     {
@@ -355,6 +514,61 @@ public sealed class SqliteProcessingJobStoreTests
             job.Revision,
             ProcessingState.Transcribing,
             ProcessingState.GeneratingStudyPackage,
+            default);
+    }
+
+    private static async Task<ProcessingJobSnapshot> MoveToCommittedStageAsync(
+        SqliteProcessingJobStore store,
+        ProcessingRequest request,
+        TestDirectory temp,
+        ProcessingState stage)
+    {
+        var job = await store.CreateAsync(request, default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.ReadyToProcess, ProcessingState.PreparingAudio, default);
+        job = await store.SaveAudioChunksAsync(
+            request.JobId,
+            job.Revision,
+            [Chunk(request, 0, 0, 10_000, HashA)],
+            default);
+        job = await store.MoveAsync(request.JobId, job.Revision, ProcessingState.PreparingAudio, ProcessingState.Transcribing, default);
+        job = await store.CommitTranscriptAsync(
+            request.JobId,
+            job.Revision,
+            Artifact(temp.File("transcript.json"), HashB),
+            default);
+        if (stage == ProcessingState.Transcribing)
+        {
+            return job;
+        }
+
+        job = await store.MoveAsync(
+            request.JobId,
+            job.Revision,
+            ProcessingState.Transcribing,
+            ProcessingState.GeneratingStudyPackage,
+            default);
+        if (stage == ProcessingState.GeneratingStudyPackage)
+        {
+            return job;
+        }
+
+        if (stage != ProcessingState.UpdatingClassGuide)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stage));
+        }
+
+        job = await store.CommitLecturePackageAsync(
+            request.JobId,
+            job.Revision,
+            Artifact(temp.File("package.json"), HashC),
+            HashA,
+            [Assignment()],
+            default);
+        return await store.MoveAsync(
+            request.JobId,
+            job.Revision,
+            ProcessingState.GeneratingStudyPackage,
+            ProcessingState.UpdatingClassGuide,
             default);
     }
 

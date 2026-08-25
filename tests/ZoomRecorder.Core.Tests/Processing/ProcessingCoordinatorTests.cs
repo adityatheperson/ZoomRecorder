@@ -71,6 +71,39 @@ public sealed class ProcessingCoordinatorTests
     }
 
     [Fact]
+    public async Task Transcript_only_completion_finishes_publication_and_cleanup_after_caller_cancellation()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var progress = new List<ProcessingState>();
+        fixture.Coordinator.ProgressChanged += (_, item) => progress.Add(item.State);
+        fixture.Store.OnCompleteTranscriptOnly = cancellation.Cancel;
+
+        await fixture.Coordinator.StartAsync(fixture.Request, cancellation.Token);
+
+        Assert.Equal(ProcessingState.Completed, (await fixture.Store.LoadAsync(JobId, default)).State);
+        Assert.Contains(ProcessingState.Completed, progress);
+        Assert.Equal([fixture.Request.JobDirectory], fixture.Artifacts.CleanupDirectories);
+    }
+
+    [Theory]
+    [InlineData(ProcessingState.GeneratingStudyPackage)]
+    [InlineData(ProcessingState.UpdatingClassGuide)]
+    public async Task Resume_completes_historical_late_stage_jobs_without_study_generation(ProcessingState stage)
+    {
+        using var fixture = new Fixture();
+        await fixture.Store.CreateAsync(fixture.Request, default);
+        fixture.Store.SeedHistoricalLateStage(stage);
+
+        await fixture.Coordinator.ResumeAsync(JobId, default);
+
+        Assert.Equal(ProcessingState.Completed, (await fixture.Store.LoadAsync(JobId, default)).State);
+        Assert.Equal(0, fixture.Generator.LectureCalls);
+        Assert.Equal(0, fixture.Generator.GuideCalls);
+        Assert.Equal(0, fixture.Recycler.Calls);
+    }
+
+    [Fact]
     public async Task Resume_reuses_every_completed_transcript_chunk()
     {
         using var fixture = new Fixture();
@@ -373,6 +406,7 @@ public sealed class ProcessingCoordinatorTests
         private readonly List<ArtifactCheckpoint> lecturePackages = [];
 
         internal bool FailMarkNeedsAttention { get; set; }
+        internal Action? OnCompleteTranscriptOnly { get; set; }
 
         public Task<ProcessingJobSnapshot> CreateAsync(ProcessingRequest request, CancellationToken cancellationToken)
         {
@@ -468,13 +502,17 @@ public sealed class ProcessingCoordinatorTests
         public Task<ProcessingJobSnapshot> CompleteTranscriptOnlyAsync(
             Guid jobId,
             long expectedRevision,
-            CancellationToken cancellationToken) =>
-            Mutate(jobId, expectedRevision, Required(jobId).State, current => current with
+            CancellationToken cancellationToken)
+        {
+            var completed = Mutate(jobId, expectedRevision, Required(jobId).State, current => current with
             {
                 State = ProcessingState.Completed,
                 FailedStage = null,
                 ErrorCode = null
             }, cancellationToken);
+            OnCompleteTranscriptOnly?.Invoke();
+            return completed;
+        }
 
         public Task<ProcessingJobSnapshot> CommitLecturePackageAsync(
             Guid jobId,
@@ -577,6 +615,22 @@ public sealed class ProcessingCoordinatorTests
                 LecturePackageArtifact = clearFinalCheckpoints ? null : current.LecturePackageArtifact,
                 AssignmentsCommitted = clearFinalCheckpoints ? false : current.AssignmentsCommitted,
                 GuideOutcome = ClassGuideOutcome.NotAttempted,
+                Revision = current.Revision + 1
+            };
+        }
+
+        internal void SeedHistoricalLateStage(ProcessingState stage)
+        {
+            if (stage is not ProcessingState.GeneratingStudyPackage and not ProcessingState.UpdatingClassGuide)
+            {
+                throw new ArgumentOutOfRangeException(nameof(stage));
+            }
+
+            var current = job ?? throw new InvalidOperationException();
+            job = current with
+            {
+                State = stage,
+                TranscriptCommitted = true,
                 Revision = current.Revision + 1
             };
         }
