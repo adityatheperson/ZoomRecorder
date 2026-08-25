@@ -17,6 +17,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <WhisperWorkersRoot Condition="'$(WhisperWorkersRoot)' == ''">$(MSBuildProjectDirectory)\..\..\artifacts\whisper-workers</WhisperWorkersRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,6 +28,14 @@
   <ItemGroup>
     <None Update="Assets\ZoomRecorder.ico" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Assets\Whisper\model-small.en.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(WhisperWorkersRoot)')">
+    <Content Include="$(WhisperWorkersRoot)\**\*">
+      <Link>tools\whisper\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
