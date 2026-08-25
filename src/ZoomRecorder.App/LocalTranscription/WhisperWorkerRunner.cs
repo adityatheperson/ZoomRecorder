@@ -1,11 +1,22 @@
 using System.Diagnostics;
 using System.Text;
+using ZoomRecorder.Core.Processing;
 
 namespace ZoomRecorder.App.LocalTranscription;
 
 internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
 {
     private const int MaximumDiagnosticCharacters = 16 * 1024;
+    private static readonly string[] RecognizedGpuInitializationDiagnostics =
+    [
+        "ggml_vulkan: failed to initialize vulkan",
+        "vulkan initialization failed",
+        "failed to create vulkan instance",
+        "failed to create vulkan device",
+        "vkcreateinstance failed",
+        "vkcreatedevice failed"
+    ];
+
     private readonly string _cpuWorkerPath;
     private readonly string _gpuWorkerPath;
 
@@ -21,39 +32,57 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
     {
         ArgumentNullException.ThrowIfNull(request);
         var paths = ValidateRequest(request);
-        cancellationToken.ThrowIfCancellationRequested();
+        using var publication = new PublicationGate(cancellationToken);
+        var ownedAttemptJsonPaths = new List<string>();
 
-        if (File.Exists(paths.JsonPath))
-        {
-            throw new IOException("The transient Whisper JSON output path is already in use.");
-        }
-
-        var outputMayBeOwned = false;
         try
         {
-            outputMayBeOwned = true;
-            var gpu = await RunWorkerAsync(_gpuWorkerPath, paths, cancellationToken);
+            publication.ThrowIfCancellationAccepted();
+            var gpuOutputBasePath = CreateAttemptOutputBase(paths.OutputBasePath, "gpu");
+            ownedAttemptJsonPaths.Add(gpuOutputBasePath + ".json");
+            var gpu = await RunWorkerAsync(
+                _gpuWorkerPath,
+                paths,
+                gpuOutputBasePath,
+                cancellationToken);
+
             if (gpu.Succeeded)
             {
-                return new WhisperWorkerResult(paths.JsonPath, UsedCpuFallback: false);
+                return Publish(gpu.JsonPath, paths.JsonPath, UsedCpuFallback: false, publication);
             }
 
-            DeleteTransient(paths.JsonPath);
-            var cpu = await RunWorkerAsync(_cpuWorkerPath, paths, cancellationToken);
+            DeleteOwnedAttempt(gpu.JsonPath);
+            publication.ThrowIfCancellationAccepted();
+            if (!gpu.AllowsCpuFallback)
+            {
+                throw RuntimeFailure();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var cpuOutputBasePath = CreateAttemptOutputBase(paths.OutputBasePath, "cpu");
+            ownedAttemptJsonPaths.Add(cpuOutputBasePath + ".json");
+            var cpu = await RunWorkerAsync(
+                _cpuWorkerPath,
+                paths,
+                cpuOutputBasePath,
+                cancellationToken);
+
             if (cpu.Succeeded)
             {
-                return new WhisperWorkerResult(paths.JsonPath, UsedCpuFallback: true);
+                return Publish(cpu.JsonPath, paths.JsonPath, UsedCpuFallback: true, publication);
             }
 
-            throw RuntimeFailure(gpu, cpu);
+            DeleteOwnedAttempt(cpu.JsonPath);
+            throw RuntimeFailure();
+        }
+        catch (OperationCanceledException) when (publication.CancellationAccepted)
+        {
+            DeleteOwnedAttempts(ownedAttemptJsonPaths);
+            throw;
         }
         catch
         {
-            if (outputMayBeOwned)
-            {
-                DeleteTransient(paths.JsonPath);
-            }
-
+            DeleteOwnedAttempts(ownedAttemptJsonPaths);
             throw;
         }
     }
@@ -61,8 +90,10 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
     private static async Task<WorkerAttempt> RunWorkerAsync(
         string workerPath,
         ValidatedPaths paths,
+        string attemptOutputBasePath,
         CancellationToken cancellationToken)
     {
+        var jsonPath = attemptOutputBasePath + ".json";
         var startInfo = new ProcessStartInfo
         {
             FileName = workerPath,
@@ -81,30 +112,30 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
         arguments.Add("en");
         arguments.Add("--output-json-full");
         arguments.Add("--output-file");
-        arguments.Add(paths.OutputBasePath);
+        arguments.Add(attemptOutputBasePath);
         arguments.Add("--no-prints");
 
+        cancellationToken.ThrowIfCancellationRequested();
         Process? process = null;
         try
         {
             process = Process.Start(startInfo);
             if (process is null)
             {
-                return WorkerAttempt.StartFailed();
+                return WorkerAttempt.StartFailed(jsonPath);
             }
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            return WorkerAttempt.StartFailed();
+            return WorkerAttempt.StartFailed(jsonPath);
         }
 
         using (process)
         {
             var stderrTask = ReadBoundedAsync(process.StandardError, MaximumDiagnosticCharacters);
             var stdoutTask = ReadBoundedAsync(process.StandardOutput, MaximumDiagnosticCharacters);
-            using var registration = cancellationToken.Register(
+            using var cancellationRegistration = cancellationToken.Register(
                 static state => KillProcessTree((Process)state!), process);
-
             try
             {
                 await process.WaitForExitAsync();
@@ -124,13 +155,37 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
             var stderr = await stderrTask;
             if (process.ExitCode != 0)
             {
-                return WorkerAttempt.NonzeroExit(process.ExitCode, stderr.Truncated);
+                return WorkerAttempt.Failed(jsonPath, IsRecognizedGpuInitializationFailure(stderr.Value));
             }
 
-            return File.Exists(paths.JsonPath)
-                ? WorkerAttempt.Success()
-                : WorkerAttempt.MissingJson(stderr.Truncated);
+            return File.Exists(jsonPath)
+                ? WorkerAttempt.Success(jsonPath)
+                : WorkerAttempt.MissingJson(jsonPath, IsRecognizedGpuInitializationFailure(stderr.Value));
         }
+    }
+
+    private static WhisperWorkerResult Publish(
+        string attemptJsonPath,
+        string finalJsonPath,
+        bool UsedCpuFallback,
+        PublicationGate publication)
+    {
+        publication.BeginCommit();
+        try
+        {
+            File.Move(attemptJsonPath, finalJsonPath, overwrite: false);
+        }
+        catch (IOException)
+        {
+            throw RuntimeFailure();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw RuntimeFailure();
+        }
+
+        publication.MarkCommitted();
+        return new WhisperWorkerResult(finalJsonPath, UsedCpuFallback);
     }
 
     private static ValidatedPaths ValidateRequest(WhisperWorkerRequest request)
@@ -157,6 +212,22 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
         return new ValidatedPaths(modelPath, wavPath, outputBasePath, outputBasePath + ".json");
     }
 
+    private static string CreateAttemptOutputBase(string finalOutputBasePath, string workerKind)
+    {
+        var directory = Path.GetDirectoryName(finalOutputBasePath)!;
+        var leaf = Path.GetFileName(finalOutputBasePath);
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var outputBasePath = Path.Combine(directory, $".{leaf}.{workerKind}.{Guid.NewGuid():N}");
+            if (!File.Exists(outputBasePath) && !File.Exists(outputBasePath + ".json"))
+            {
+                return outputBasePath;
+            }
+        }
+
+        throw RuntimeFailure();
+    }
+
     private static string CanonicalAbsolutePath(string path, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path, parameterName);
@@ -167,6 +238,10 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
 
         return Path.GetFullPath(path);
     }
+
+    private static bool IsRecognizedGpuInitializationFailure(string diagnostics) =>
+        RecognizedGpuInitializationDiagnostics.Any(category =>
+            diagnostics.Contains(category, StringComparison.OrdinalIgnoreCase));
 
     private static async Task<BoundedOutput> ReadBoundedAsync(StreamReader reader, int maximumCharacters)
     {
@@ -213,27 +288,35 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
         }
     }
 
-    private static void DeleteTransient(string path)
+    private static void DeleteOwnedAttempts(IEnumerable<string> paths)
     {
-        try
+        foreach (var path in paths)
         {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (IOException)
-        {
-            // Recovery cleanup retries the unique transient output path.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Recovery cleanup retries the unique transient output path.
+            DeleteOwnedAttempt(path);
         }
     }
 
-    private static InvalidOperationException RuntimeFailure(WorkerAttempt gpu, WorkerAttempt cpu) =>
-        new($"Whisper worker runtime failed. GPU: {gpu.Diagnostic}; CPU: {cpu.Diagnostic}.");
+    private static void DeleteOwnedAttempt(string path)
+    {
+        if (File.Exists(path))
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+                throw RuntimeFailure();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw RuntimeFailure();
+            }
+        }
+    }
+
+    private static ProcessingOperationException RuntimeFailure() =>
+        new(CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed);
 
     private sealed record ValidatedPaths(
         string ModelPath,
@@ -243,15 +326,81 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
 
     private sealed record BoundedOutput(string Value, bool Truncated);
 
-    private sealed record WorkerAttempt(string Diagnostic, bool Succeeded)
+    private sealed record WorkerAttempt(string JsonPath, bool Succeeded, bool AllowsCpuFallback)
     {
-        internal static WorkerAttempt Success() => new("success", true);
-        internal static WorkerAttempt StartFailed() => new("start-failed (exit code unavailable)", false);
-        internal static WorkerAttempt MissingJson(bool stderrTruncated) =>
-            new($"missing-json (exit code 0{TruncationSuffix(stderrTruncated)})", false);
-        internal static WorkerAttempt NonzeroExit(int exitCode, bool stderrTruncated) =>
-            new($"nonzero-exit (exit code {exitCode}{TruncationSuffix(stderrTruncated)})", false);
+        internal static WorkerAttempt Success(string jsonPath) => new(jsonPath, true, false);
+        internal static WorkerAttempt StartFailed(string jsonPath) => new(jsonPath, false, true);
+        internal static WorkerAttempt MissingJson(string jsonPath, bool allowsCpuFallback) =>
+            new(jsonPath, false, allowsCpuFallback);
+        internal static WorkerAttempt Failed(string jsonPath, bool allowsCpuFallback) =>
+            new(jsonPath, false, allowsCpuFallback);
+    }
 
-        private static string TruncationSuffix(bool truncated) => truncated ? ", stderr-truncated" : string.Empty;
+    private sealed class PublicationGate : IDisposable
+    {
+        private readonly CancellationTokenRegistration _registration;
+        private readonly object _sync = new();
+        private bool _cancellationAccepted;
+        private bool _commitStarted;
+        private bool _committed;
+
+        internal PublicationGate(CancellationToken cancellationToken) =>
+            _registration = cancellationToken.Register(static state => ((PublicationGate)state!).AcceptCancellation(), this);
+
+        internal bool CancellationAccepted
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _cancellationAccepted;
+                }
+            }
+        }
+
+        internal void ThrowIfCancellationAccepted()
+        {
+            lock (_sync)
+            {
+                if (_cancellationAccepted)
+                {
+                    throw new OperationCanceledException();
+                }
+            }
+        }
+
+        internal void BeginCommit()
+        {
+            lock (_sync)
+            {
+                if (_cancellationAccepted)
+                {
+                    throw new OperationCanceledException();
+                }
+
+                _commitStarted = true;
+            }
+        }
+
+        internal void MarkCommitted()
+        {
+            lock (_sync)
+            {
+                _committed = true;
+            }
+        }
+
+        private void AcceptCancellation()
+        {
+            lock (_sync)
+            {
+                if (!_commitStarted && !_committed)
+                {
+                    _cancellationAccepted = true;
+                }
+            }
+        }
+
+        public void Dispose() => _registration.Dispose();
     }
 }
