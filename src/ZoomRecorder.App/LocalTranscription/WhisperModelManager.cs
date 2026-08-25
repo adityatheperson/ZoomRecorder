@@ -63,13 +63,28 @@ internal sealed class WhisperModelManager : IWhisperModelManager
         long callerId,
         CancellationToken cancellationToken)
     {
+        var callerRemoved = false;
         try
         {
             return await acquisition.Task.WaitAsync(cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            var canceledAcquisition = RemoveCaller(acquisition, callerId);
+            callerRemoved = true;
+            if (canceledAcquisition)
+            {
+                await WaitForAcquisitionCleanupAsync(acquisition.Task);
+            }
+
+            throw;
+        }
         finally
         {
-            RemoveCaller(acquisition, callerId);
+            if (!callerRemoved)
+            {
+                RemoveCaller(acquisition, callerId);
+            }
         }
     }
 
@@ -210,7 +225,7 @@ internal sealed class WhisperModelManager : IWhisperModelManager
         File.Move(sourcePath, quarantinePath, overwrite: false);
     }
 
-    private void RemoveCaller(SharedAcquisition acquisition, long callerId)
+    private bool RemoveCaller(SharedAcquisition acquisition, long callerId)
     {
         lock (_acquisitionLock)
         {
@@ -218,7 +233,22 @@ internal sealed class WhisperModelManager : IWhisperModelManager
             if (acquisition.CallerCount == 0 && !acquisition.Task.IsCompleted)
             {
                 acquisition.Cancellation.Cancel();
+                return true;
             }
+
+            return false;
+        }
+    }
+
+    private static async Task WaitForAcquisitionCleanupAsync(Task acquisitionTask)
+    {
+        try
+        {
+            await acquisitionTask;
+        }
+        catch
+        {
+            // The caller's cancellation remains the observable result after shared cleanup finishes.
         }
     }
 

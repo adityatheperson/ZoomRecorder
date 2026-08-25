@@ -105,6 +105,35 @@ public sealed class WhisperModelManagerTests
     }
 
     [Fact]
+    public async Task Final_canceled_caller_waits_for_partial_cleanup_and_stream_disposal()
+    {
+        using var fixture = ModelFixture.ValidPayload();
+        fixture.Handler.DelayCancellationCleanup = true;
+        using var cancellation = new CancellationTokenSource();
+        var wrotePartial = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var caller = fixture.Manager.EnsureModelAsync(
+            new DelegateProgress<ModelDownloadProgress>(_ => wrotePartial.TrySetResult(true)),
+            cancellation.Token);
+        await wrotePartial.Task;
+        cancellation.Cancel();
+        await fixture.Handler.WaitForCancellationCleanupAsync();
+
+        var callerCompletedBeforeCleanup = caller.IsCompleted;
+        var partialsBeforeCleanup = Directory.EnumerateFiles(fixture.ModelsRoot, "*.partial").ToArray();
+        var streamDisposedBeforeCleanup = fixture.Handler.StreamDisposed.IsCompleted;
+        fixture.Handler.ReleaseCancellationCleanup();
+        var cancellationException = await Record.ExceptionAsync(() => caller);
+
+        Assert.False(callerCompletedBeforeCleanup);
+        Assert.NotEmpty(partialsBeforeCleanup);
+        Assert.False(streamDisposedBeforeCleanup);
+        Assert.IsAssignableFrom<OperationCanceledException>(cancellationException);
+        Assert.Empty(Directory.EnumerateFiles(fixture.ModelsRoot, "*.partial"));
+        Assert.True(fixture.Handler.StreamDisposed.IsCompleted);
+    }
+
+    [Fact]
     public async Task Quarantines_a_corrupt_cached_model_before_downloading_a_replacement()
     {
         using var fixture = ModelFixture.ValidPayload();
@@ -196,9 +225,10 @@ public sealed class WhisperModelManagerTests
         laterCancellation.Cancel();
 
         var completed = await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(1)));
-        fixture.Handler.ReleaseBody();
         Assert.Same(second, completed);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+        Assert.False(first.IsCompleted);
+        fixture.Handler.ReleaseBody();
 
         Assert.Equal(fixture.FinalModelPath, await first);
         Assert.Equal(1, fixture.Handler.RequestCount);
@@ -283,19 +313,32 @@ public sealed class WhisperModelManagerTests
     {
         private readonly TaskCompletionSource<bool> _requestObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<bool> _bodyReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _cancellationCleanupStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _cancellationCleanupReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _streamDisposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public byte[] Payload { get; set; } = payload;
         public bool BlockAfterFirstResponse { get; set; }
         public bool BlockUntilReleased { get; set; }
+        public bool DelayCancellationCleanup { get; set; }
         private int _requestCount;
         public int RequestCount => _requestCount;
+        public Task StreamDisposed => _streamDisposed.Task;
         public Task WaitForRequestAsync() => _requestObserved.Task;
+        public Task WaitForCancellationCleanupAsync() => _cancellationCleanupStarted.Task;
         public void ReleaseBody() => _bodyReleased.TrySetResult(true);
+        public void ReleaseCancellationCleanup() => _cancellationCleanupReleased.TrySetResult(true);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _requestCount);
             _requestObserved.TrySetResult(true);
-            HttpContent content = BlockUntilReleased
+            HttpContent content = DelayCancellationCleanup
+                ? new CancellationCleanupContent(
+                    Payload,
+                    _cancellationCleanupStarted,
+                    _cancellationCleanupReleased.Task,
+                    _streamDisposed)
+                : BlockUntilReleased
                 ? new GatedContent(Payload, _bodyReleased.Task)
                 : BlockAfterFirstResponse
                     ? new BlockingContent(Payload)
@@ -367,6 +410,77 @@ public sealed class WhisperModelManagerTests
 
         protected override Task<Stream> CreateContentReadStreamAsync() =>
             Task.FromResult<Stream>(new GatedReadStream(payload, released));
+    }
+
+    private sealed class CancellationCleanupContent(
+        byte[] payload,
+        TaskCompletionSource<bool> cleanupStarted,
+        Task cleanupReleased,
+        TaskCompletionSource<bool> streamDisposed) : HttpContent
+    {
+        protected override bool TryComputeLength(out long length)
+        {
+            length = payload.Length;
+            return true;
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new NotSupportedException();
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new CancellationCleanupReadStream(payload, cleanupStarted, cleanupReleased, streamDisposed));
+    }
+
+    private sealed class CancellationCleanupReadStream(
+        byte[] payload,
+        TaskCompletionSource<bool> cleanupStarted,
+        Task cleanupReleased,
+        TaskCompletionSource<bool> streamDisposed) : Stream
+    {
+        private bool _served;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (!_served)
+            {
+                _served = true;
+                buffer.Span[0] = payload[0];
+                return 1;
+            }
+
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return 0;
+            }
+            catch (OperationCanceledException)
+            {
+                cleanupStarted.TrySetResult(true);
+                await cleanupReleased;
+                throw;
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                streamDisposed.TrySetResult(true);
+            }
+
+            base.Dispose(disposing);
+        }
     }
 
     private sealed class GatedReadStream(byte[] payload, Task released) : Stream
