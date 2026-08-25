@@ -29,9 +29,26 @@ public partial class App : Application
         }
         catch (Exception exception)
         {
+            string? diagnosticPath = null;
+            try
+            {
+                diagnosticPath = StartupFailureDiagnostic.Write(
+                    exception,
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "ZoomRecorder",
+                        "Logs"));
+            }
+            catch
+            {
+                // The original startup failure remains the user-visible result.
+            }
+
             _window = new Window { Content = new Microsoft.UI.Xaml.Controls.TextBlock
             {
-                Text = $"Zoom Recorder could not start: {exception.Message}",
+                Text = diagnosticPath is null
+                    ? $"Zoom Recorder could not start: {exception.Message}"
+                    : $"Zoom Recorder could not start: {exception.Message}\n\nDiagnostic: {diagnosticPath}",
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(32)
             }};

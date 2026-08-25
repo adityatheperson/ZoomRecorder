@@ -2,7 +2,7 @@ param([string]$ReleaseDirectory)
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) { throw 'Pass -ReleaseDirectory.' }
-$required = @('ZoomRecorder.App.exe', 'ZoomRecorder.App.dll', 'ZoomRecorder.Native.dll')
+$required = @('ZoomRecorder.App.exe', 'ZoomRecorder.App.dll', 'ZoomRecorder.App.pri', 'ZoomRecorder.Native.dll')
 $required += @(
     'Assets\Whisper\model-small.en.json',
     'tools\whisper\LICENSE-whisper.cpp',

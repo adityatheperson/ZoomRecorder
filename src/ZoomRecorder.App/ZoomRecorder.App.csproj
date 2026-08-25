@@ -38,4 +38,15 @@
     </Content>
   </ItemGroup>
 
+  <Target Name="CopyApplicationPriToPublishDirectory" AfterTargets="Publish">
+    <PropertyGroup>
+      <ApplicationPriPath>$(TargetDir)$(AssemblyName).pri</ApplicationPriPath>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(ApplicationPriPath)')"
+           Text="The compiled application PRI was not generated at $(ApplicationPriPath)." />
+    <Copy SourceFiles="$(ApplicationPriPath)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>
