@@ -32,6 +32,8 @@ public sealed class WhisperWorkerRunnerTests
         Assert.Equal(files.JsonPath, result.JsonPath);
         Assert.True(result.UsedCpuFallback);
         Assert.True(File.Exists(files.CpuMarkerPath));
+        Assert.Equal(1, files.InvocationCount("gpu"));
+        Assert.Equal(1, files.InvocationCount("cpu"));
     }
 
     [Fact]
@@ -46,6 +48,8 @@ public sealed class WhisperWorkerRunnerTests
 
         Assert.Equal(CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed, exception.Code);
         Assert.False(File.Exists(files.CpuMarkerPath));
+        Assert.Equal(1, files.InvocationCount("gpu"));
+        Assert.Equal(0, files.InvocationCount("cpu"));
     }
 
     [Fact]
@@ -79,6 +83,8 @@ public sealed class WhisperWorkerRunnerTests
 
         Assert.Equal(CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed, exception.Code);
         Assert.False(File.Exists(files.CpuMarkerPath));
+        Assert.Equal(1, files.InvocationCount("gpu"));
+        Assert.Equal(0, files.InvocationCount("cpu"));
     }
 
     [Fact]
@@ -91,6 +97,117 @@ public sealed class WhisperWorkerRunnerTests
 
         Assert.True(result.UsedCpuFallback);
         Assert.True(File.Exists(files.CpuMarkerPath));
+        Assert.Equal(0, files.InvocationCount("gpu"));
+        Assert.Equal(1, files.InvocationCount("cpu"));
+    }
+
+    [Fact]
+    public async Task Cancellation_between_recognized_gpu_fallback_and_cpu_start_does_not_invoke_cpu()
+    {
+        using var files = new WorkerFiles();
+        files.WriteWorker("gpu.cmd", WorkerFiles.GpuInitializationFail(17));
+        files.WriteWorker("cpu.cmd", WorkerBehavior.SuccessWithMarker);
+        using var cancellation = new CancellationTokenSource();
+        var launches = new List<WhisperWorkerLaunch>();
+
+        var operation = files.CreateRunner(launch =>
+        {
+            launches.Add(launch);
+            if (string.Equals(launch.WorkerPath, files.CpuWorkerPath, StringComparison.OrdinalIgnoreCase))
+            {
+                cancellation.Cancel();
+            }
+        }).RunAsync(files.Request, cancellation.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.Equal(2, launches.Count);
+        Assert.False(File.Exists(files.CpuMarkerPath));
+        Assert.Equal(1, files.InvocationCount("gpu"));
+        Assert.Equal(0, files.InvocationCount("cpu"));
+        Assert.False(File.Exists(files.JsonPath));
+        Assert.Empty(Directory.GetFiles(files.JobDirectory, ".*.json"));
+    }
+
+    [Fact]
+    public async Task Cancellation_releases_a_locked_owned_attempt_output_and_leaves_no_json()
+    {
+        using var files = new WorkerFiles();
+        files.WriteWorker("gpu.cmd", WorkerBehavior.LockedAttemptOutput);
+        files.WriteWorker("cpu.cmd", WorkerBehavior.SuccessWithMarker);
+        using var cancellation = new CancellationTokenSource();
+
+        var operation = files.CreateRunner().RunAsync(files.Request, cancellation.Token);
+        Assert.True(SpinWait.SpinUntil(() => File.Exists(files.ReadyPath), TimeSpan.FromSeconds(5)));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.False(File.Exists(files.JsonPath));
+        Assert.Empty(Directory.GetFiles(files.JobDirectory, ".*.json"));
+        Assert.False(File.Exists(files.CpuMarkerPath));
+    }
+
+    [Fact]
+    public async Task Uses_exact_ordered_arguments_and_private_output_bases_for_workers()
+    {
+        using var files = new WorkerFiles();
+        files.WriteWorker("gpu.cmd", WorkerFiles.GpuInitializationFail(17));
+        files.WriteWorker("cpu.cmd", WorkerBehavior.SuccessWithMarker);
+        var launches = new List<WhisperWorkerLaunch>();
+
+        var result = await files.CreateRunner(launch => launches.Add(launch)).RunAsync(files.Request, CancellationToken.None);
+
+        Assert.True(result.UsedCpuFallback);
+        Assert.Equal(2, launches.Count);
+        var expectedPrefix = new[]
+        {
+            "--model", files.ModelPath,
+            "--file", files.WavPath,
+            "--language", "en",
+            "--output-json-full",
+            "--output-file"
+        };
+        foreach (var launch in launches)
+        {
+            Assert.Equal(expectedPrefix, launch.Arguments.Take(expectedPrefix.Length));
+            Assert.Equal("--no-prints", launch.Arguments[^1]);
+            Assert.Equal(expectedPrefix.Length + 2, launch.Arguments.Count);
+            var privateOutputBase = launch.Arguments[^2];
+            Assert.NotEqual(files.OutputBasePath, privateOutputBase);
+            Assert.Equal(files.JobDirectory, Path.GetDirectoryName(privateOutputBase), StringComparer.OrdinalIgnoreCase);
+        }
+        Assert.NotEqual(launches[0].Arguments[^2], launches[1].Arguments[^2]);
+        Assert.Contains(" & ", files.ModelPath, StringComparison.Ordinal);
+        Assert.Contains(" & ", files.WavPath, StringComparison.Ordinal);
+        Assert.Contains(" & ", files.OutputBasePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Drains_saturated_stdout_before_worker_exit()
+    {
+        using var files = new WorkerFiles();
+        files.WriteWorker("gpu.cmd", WorkerBehavior.StdoutSaturation);
+        files.WriteWorker("cpu.cmd", WorkerBehavior.SuccessWithMarker);
+
+        var result = await files.CreateRunner().RunAsync(files.Request, CancellationToken.None);
+
+        Assert.False(result.UsedCpuFallback);
+        Assert.True(File.Exists(result.JsonPath));
+        Assert.False(File.Exists(files.CpuMarkerPath));
+    }
+
+    [Fact]
+    public async Task Both_worker_failures_invoke_each_worker_once_and_map_to_the_local_runtime_error()
+    {
+        using var files = new WorkerFiles();
+        files.WriteWorker("gpu.cmd", WorkerFiles.GpuInitializationFail(17));
+        files.WriteWorker("cpu.cmd", WorkerFiles.Fail(23));
+
+        var exception = await Assert.ThrowsAsync<ProcessingOperationException>(() =>
+            files.CreateRunner().RunAsync(files.Request, CancellationToken.None));
+
+        Assert.Equal(CloudProcessingErrorCode.LocalTranscriptionRuntimeFailed, exception.Code);
+        Assert.Equal(1, files.InvocationCount("gpu"));
+        Assert.Equal(1, files.InvocationCount("cpu"));
     }
 
     [Fact]
@@ -175,7 +292,9 @@ public sealed class WhisperWorkerRunnerTests
         SuccessWithMarker,
         ExitWithoutJson,
         SlowWithChild,
-        DelayedSuccess
+        DelayedSuccess,
+        LockedAttemptOutput,
+        StdoutSaturation
     }
 
     private sealed class WorkerFiles : IDisposable
@@ -185,9 +304,9 @@ public sealed class WhisperWorkerRunnerTests
             Root = Path.Combine(Path.GetTempPath(), $"zoom-recorder-whisper-worker-{Guid.NewGuid():N}");
             JobDirectory = Path.Combine(Root, "job");
             Directory.CreateDirectory(JobDirectory);
-            ModelPath = Path.Combine(Root, "model.bin");
-            WavPath = Path.Combine(JobDirectory, "audio.wav");
-            OutputBasePath = Path.Combine(JobDirectory, "transcript");
+            ModelPath = Path.Combine(Root, "model & alpha.bin");
+            WavPath = Path.Combine(JobDirectory, "audio & beta.wav");
+            OutputBasePath = Path.Combine(JobDirectory, "transcript & output");
             JsonPath = OutputBasePath + ".json";
             CpuMarkerPath = Path.Combine(Root, "cpu-ran");
             ReadyPath = Path.Combine(Root, "ready");
@@ -205,36 +324,43 @@ public sealed class WhisperWorkerRunnerTests
         internal string CpuMarkerPath { get; }
         internal string ReadyPath { get; }
         internal string OrphanMarkerPath { get; }
+        internal string InvocationPath(string worker) => Path.Combine(Root, worker + "-invocations");
         internal string GpuWorkerPath => Path.Combine(Root, "gpu.cmd");
         internal string CpuWorkerPath => Path.Combine(Root, "cpu.cmd");
         internal WhisperWorkerRequest Request => new(ModelPath, WavPath, OutputBasePath);
 
-        internal WhisperWorkerRunner CreateRunner() => new(GpuWorkerPath, CpuWorkerPath);
+        internal WhisperWorkerRunner CreateRunner(Action<WhisperWorkerLaunch>? beforeStart = null) => new(GpuWorkerPath, CpuWorkerPath, beforeStart);
+
+        internal int InvocationCount(string worker) => File.Exists(InvocationPath(worker))
+            ? File.ReadAllLines(InvocationPath(worker)).Length
+            : 0;
 
         internal void WriteWorker(string name, WorkerBehavior behavior)
         {
             var script = behavior switch
             {
-                WorkerBehavior.Success => SuccessScript(marker: null),
-                WorkerBehavior.SuccessWithMarker => SuccessScript(CpuMarkerPath),
-                WorkerBehavior.ExitWithoutJson => "@echo off\r\nexit /b 0\r\n",
+                WorkerBehavior.Success => SuccessScript(name, marker: null),
+                WorkerBehavior.SuccessWithMarker => SuccessScript(name, CpuMarkerPath),
+                WorkerBehavior.ExitWithoutJson => ExitWithoutJsonScript(name),
                 WorkerBehavior.SlowWithChild => SlowScript(),
                 WorkerBehavior.DelayedSuccess => DelayedSuccessScript(),
+                WorkerBehavior.LockedAttemptOutput => LockedAttemptOutputScript(),
+                WorkerBehavior.StdoutSaturation => StdoutSaturationScript(name),
                 _ => throw new ArgumentOutOfRangeException(nameof(behavior))
             };
             File.WriteAllText(Path.Combine(Root, name), script);
         }
 
         internal void WriteWorker(string name, FailedWorkerBehavior behavior) =>
-            File.WriteAllText(Path.Combine(Root, name), FailureScript(behavior.ExitCode, behavior.Noisy, behavior.GpuInitializationFailure));
+            File.WriteAllText(Path.Combine(Root, name), FailureScript(name, behavior.ExitCode, behavior.Noisy, behavior.GpuInitializationFailure));
 
         internal static FailedWorkerBehavior Fail(int exitCode) => new(exitCode, false);
         internal static FailedWorkerBehavior NoisyFail(int exitCode) => new(exitCode, true);
         internal static FailedWorkerBehavior GpuInitializationFail(int exitCode) => new(exitCode, false, true);
 
-        private string SuccessScript(string? marker) =>
+        private string SuccessScript(string name, string? marker) =>
             $"@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\nset \"out=\"\r\n" +
-            $":next\r\nif \"%~1\"==\"\" goto done\r\nif /I \"%~1\"==\"--output-file\" set \"out=%~2\"\r\n" +
+            $"> \"{InvocationPath(Path.GetFileNameWithoutExtension(name))}\" echo invoked\r\n:next\r\nif \"%~1\"==\"\" goto done\r\nif /I \"%~1\"==\"--output-file\" set \"out=%~2\"\r\n" +
             $"shift\r\ngoto next\r\n:done\r\n> \"%out%.json\" echo {{\"result\":\"ok\"}}\r\n" +
             $"{MarkerLine(marker)}\r\nexit /b 0\r\n";
 
@@ -246,9 +372,19 @@ public sealed class WhisperWorkerRunnerTests
             $"@echo off\r\nset \"out=\"\r\n:next\r\nif \"%~1\"==\"\" goto done\r\nif /I \"%~1\"==\"--output-file\" set \"out=%~2\"\r\nshift\r\ngoto next\r\n:done\r\n" +
             $"> \"{ReadyPath}\" echo ready\r\ntimeout /t 2 /nobreak >nul\r\n> \"%out%.json\" echo {{\"result\":\"worker\"}}\r\nexit /b 0\r\n";
 
-        private static string FailureScript(int exitCode, bool noisy, bool gpuInitializationFailure = false) => noisy
-            ? $"@echo off\r\nfor /L %%i in (1,1,20000) do <nul set /p =x 1>&2\r\nexit /b {exitCode}\r\n"
-            : $"@echo off\r\necho {(gpuInitializationFailure ? "ggml_vulkan: failed to initialize Vulkan" : "worker failure")} 1>&2\r\nexit /b {exitCode}\r\n";
+        private string ExitWithoutJsonScript(string name) =>
+            $"@echo off\r\n> \"{InvocationPath(Path.GetFileNameWithoutExtension(name))}\" echo invoked\r\nexit /b 0\r\n";
+
+        private string LockedAttemptOutputScript() =>
+            $"@echo off\r\nset \"out=\"\r\n:next\r\nif \"%~1\"==\"\" goto done\r\nif /I \"%~1\"==\"--output-file\" set \"out=%~2\"\r\nshift\r\ngoto next\r\n:done\r\n" +
+            $"> \"%out%.json\" echo {{\"result\":\"locked\"}}\r\npowershell.exe -NoProfile -Command \"$f=[IO.File]::Open('%out%.json',[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None); Set-Content -LiteralPath '{ReadyPath}' -Value locked; Start-Sleep -Seconds 30\"\r\nexit /b 0\r\n";
+
+        private string StdoutSaturationScript(string name) =>
+            $"@echo off\r\n> \"{InvocationPath(Path.GetFileNameWithoutExtension(name))}\" echo invoked\r\nset \"out=\"\r\n:next\r\nif \"%~1\"==\"\" goto done\r\nif /I \"%~1\"==\"--output-file\" set \"out=%~2\"\r\nshift\r\ngoto next\r\n:done\r\nfor /L %%i in (1,1,200000) do <nul set /p =x\r\n> \"%out%.json\" echo {{\"result\":\"ok\"}}\r\nexit /b 0\r\n";
+
+        private string FailureScript(string name, int exitCode, bool noisy, bool gpuInitializationFailure = false) => noisy
+            ? $"@echo off\r\n> \"{InvocationPath(Path.GetFileNameWithoutExtension(name))}\" echo invoked\r\nfor /L %%i in (1,1,20000) do <nul set /p =x 1>&2\r\nexit /b {exitCode}\r\n"
+            : $"@echo off\r\n> \"{InvocationPath(Path.GetFileNameWithoutExtension(name))}\" echo invoked\r\necho {(gpuInitializationFailure ? "ggml_vulkan: failed to initialize Vulkan" : "worker failure")} 1>&2\r\nexit /b {exitCode}\r\n";
 
         private static string? MarkerLine(string? marker) => marker is null ? null : $"> \"{marker}\" echo cpu";
 

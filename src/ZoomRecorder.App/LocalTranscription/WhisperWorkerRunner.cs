@@ -19,11 +19,21 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
 
     private readonly string _cpuWorkerPath;
     private readonly string _gpuWorkerPath;
+    private readonly Action<WhisperWorkerLaunch>? _beforeStart;
 
     public WhisperWorkerRunner(string gpuWorkerPath, string cpuWorkerPath)
+        : this(gpuWorkerPath, cpuWorkerPath, null)
+    {
+    }
+
+    internal WhisperWorkerRunner(
+        string gpuWorkerPath,
+        string cpuWorkerPath,
+        Action<WhisperWorkerLaunch>? beforeStart)
     {
         _gpuWorkerPath = CanonicalAbsolutePath(gpuWorkerPath, nameof(gpuWorkerPath));
         _cpuWorkerPath = CanonicalAbsolutePath(cpuWorkerPath, nameof(cpuWorkerPath));
+        _beforeStart = beforeStart;
     }
 
     public async Task<WhisperWorkerResult> RunAsync(
@@ -44,7 +54,8 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
                 _gpuWorkerPath,
                 paths,
                 gpuOutputBasePath,
-                cancellationToken);
+                cancellationToken,
+                _beforeStart);
 
             if (gpu.Succeeded)
             {
@@ -65,7 +76,8 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
                 _cpuWorkerPath,
                 paths,
                 cpuOutputBasePath,
-                cancellationToken);
+                cancellationToken,
+                _beforeStart);
 
             if (cpu.Succeeded)
             {
@@ -91,7 +103,8 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
         string workerPath,
         ValidatedPaths paths,
         string attemptOutputBasePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<WhisperWorkerLaunch>? beforeStart)
     {
         var jsonPath = attemptOutputBasePath + ".json";
         var startInfo = new ProcessStartInfo
@@ -115,6 +128,8 @@ internal sealed class WhisperWorkerRunner : IWhisperWorkerRunner
         arguments.Add(attemptOutputBasePath);
         arguments.Add("--no-prints");
 
+        cancellationToken.ThrowIfCancellationRequested();
+        beforeStart?.Invoke(new WhisperWorkerLaunch(workerPath, startInfo.ArgumentList.ToArray()));
         cancellationToken.ThrowIfCancellationRequested();
         Process? process = null;
         try

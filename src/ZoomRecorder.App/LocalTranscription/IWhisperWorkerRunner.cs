@@ -9,6 +9,10 @@ internal sealed record WhisperWorkerResult(
     string JsonPath,
     bool UsedCpuFallback);
 
+internal sealed record WhisperWorkerLaunch(
+    string WorkerPath,
+    IReadOnlyList<string> Arguments);
+
 internal interface IWhisperWorkerRunner
 {
     Task<WhisperWorkerResult> RunAsync(
