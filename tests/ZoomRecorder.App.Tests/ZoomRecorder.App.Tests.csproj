@@ -26,4 +26,8 @@
     <ProjectReference Include="..\..\src\ZoomRecorder.Core\ZoomRecorder.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="LocalTranscription\Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

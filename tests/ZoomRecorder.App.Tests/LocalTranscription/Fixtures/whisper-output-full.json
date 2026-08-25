@@ -1,0 +1,20 @@
+{
+  "systeminfo": "whisper.cpp v1.9.1",
+  "model": { "type": "small.en" },
+  "params": { "language": "en", "translate": false },
+  "result": { "language": "en" },
+  "transcription": [
+    {
+      "timestamps": { "from": "00:00:00,000", "to": "00:00:01,250" },
+      "offsets": { "from": 0, "to": 1250 },
+      "text": "  hello   world  ",
+      "tokens": []
+    },
+    {
+      "timestamps": { "from": "00:00:01,250", "to": "00:00:02,000" },
+      "offsets": { "from": 1250, "to": 2000 },
+      "text": "from\tclass",
+      "tokens": []
+    }
+  ]
+}
