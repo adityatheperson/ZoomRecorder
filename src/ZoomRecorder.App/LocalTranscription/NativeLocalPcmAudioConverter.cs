@@ -54,6 +54,10 @@ internal sealed class NativeLocalPcmAudioConverter : ILocalPcmAudioConverter
         {
             throw new DirectoryNotFoundException($"The local transcription job directory does not exist: {canonicalJobDirectory}");
         }
+        if (ContainsReparsePoint(canonicalJobDirectory))
+        {
+            throw new ArgumentException("The local transcription job directory cannot contain reparse points.", nameof(jobDirectory));
+        }
         if (string.IsNullOrWhiteSpace(chunk.Path) || !Path.IsPathFullyQualified(chunk.Path))
         {
             throw InvalidSource("the M4A checkpoint path is missing or not absolute");
@@ -64,6 +68,10 @@ internal sealed class NativeLocalPcmAudioConverter : ILocalPcmAudioConverter
             !string.Equals(Path.GetExtension(sourcePath), ".m4a", StringComparison.OrdinalIgnoreCase))
         {
             throw InvalidSource("the source escapes the job directory or is not an M4A checkpoint");
+        }
+        if (ContainsReparsePoint(sourcePath))
+        {
+            throw InvalidSource("the M4A checkpoint path contains a reparse point");
         }
         if (!File.Exists(sourcePath))
         {
@@ -119,9 +127,8 @@ internal sealed class NativeLocalPcmAudioConverter : ILocalPcmAudioConverter
         }
         finally
         {
-            if (!succeeded)
+            if (!succeeded && result == ZrResult.Ok)
             {
-                DeleteTransient(wavPath + ".partial");
                 DeleteTransient(wavPath);
             }
         }
@@ -152,7 +159,8 @@ internal sealed class NativeLocalPcmAudioConverter : ILocalPcmAudioConverter
     {
         if (!Path.IsPathFullyQualified(wavPath) ||
             !string.Equals(Path.GetDirectoryName(Path.GetFullPath(wavPath)), jobDirectory, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(Path.GetExtension(wavPath), ".wav", StringComparison.OrdinalIgnoreCase))
+            !string.Equals(Path.GetExtension(wavPath), ".wav", StringComparison.OrdinalIgnoreCase) ||
+            ContainsReparsePoint(wavPath))
         {
             throw new InvalidDataException("Native PCM conversion returned an invalid WAV path.");
         }
@@ -189,6 +197,37 @@ internal sealed class NativeLocalPcmAudioConverter : ILocalPcmAudioConverter
 
     private static InvalidDataException InvalidSource(string reason) =>
         new($"The audio chunk is not a valid local M4A checkpoint: {reason}.");
+
+    private static bool ContainsReparsePoint(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath)
+            ?? throw new InvalidDataException("A filesystem path has no canonical root.");
+        var current = root;
+        foreach (var component in fullPath[root.Length..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, component);
+            try
+            {
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                {
+                    return true;
+                }
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
 
     private static InvalidDataException InvalidWav() =>
         new("Native PCM conversion returned an invalid mono 16 kHz 16-bit PCM WAV file.");

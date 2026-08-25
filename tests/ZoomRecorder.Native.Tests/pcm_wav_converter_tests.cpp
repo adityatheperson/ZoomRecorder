@@ -8,12 +8,16 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -34,6 +38,62 @@ bool expect(bool condition, const char* message) {
   if (!condition) std::fprintf(stderr, "pcm wav converter test failed: %s\n", message);
   return condition;
 }
+
+bool create_junction(const fs::path& junction, const fs::path& target) {
+  const auto command = L"cmd.exe /d /c mklink /J \"" + junction.wstring() + L"\" \"" +
+    target.wstring() + L"\" >nul";
+  return _wsystem(command.c_str()) == 0;
+}
+
+struct api_publication_gate {
+  std::mutex mutex;
+  std::condition_variable changed;
+  zr_pcm_convert_handle handle{};
+  bool entered{};
+  bool released{};
+  size_t cancellations{};
+};
+
+void __stdcall block_api_publication(void* handle, void* context) {
+  auto& gate = *static_cast<api_publication_gate*>(context);
+  std::unique_lock lock(gate.mutex);
+  gate.handle = static_cast<zr_pcm_convert_handle>(handle);
+  gate.entered = true;
+  gate.changed.notify_all();
+  gate.changed.wait(lock, [&gate] { return gate.released; });
+}
+
+void __stdcall observe_api_cancellation(void*, void* context) {
+  auto& gate = *static_cast<api_publication_gate*>(context);
+  std::scoped_lock lock(gate.mutex);
+  ++gate.cancellations;
+  gate.changed.notify_all();
+}
+
+bool wait_for_api_publication(api_publication_gate& gate) {
+  std::unique_lock lock(gate.mutex);
+  return gate.changed.wait_for(lock, std::chrono::seconds(5), [&gate] { return gate.entered; });
+}
+
+bool wait_for_api_cancellation(api_publication_gate& gate) {
+  std::unique_lock lock(gate.mutex);
+  return gate.changed.wait_for(lock, std::chrono::seconds(5), [&gate] { return gate.cancellations != 0; });
+}
+
+void release_api_publication(api_publication_gate& gate) {
+  std::scoped_lock lock(gate.mutex);
+  gate.released = true;
+  gate.changed.notify_all();
+}
+
+class api_test_seam_guard {
+ public:
+  explicit api_test_seam_guard(api_publication_gate& gate) {
+    const pcm_wav_api_test_seam seam{block_api_publication, observe_api_cancellation, &gate};
+    zr_set_pcm_wav_api_test_seam(&seam);
+  }
+  ~api_test_seam_guard() { zr_set_pcm_wav_api_test_seam(nullptr); }
+};
 
 bool create_fixture(const fs::path& path, int duration_seconds, bool write_audio) {
   Mp4Writer writer;
@@ -98,13 +158,116 @@ bool validate_pcm_wav(const fs::path& path) {
     uint16_at(header, 32) == 2 && uint16_at(header, 34) == 16 &&
     data_length > 0 && data_length == file_size - 44 && data_length % 2 == 0;
 }
+
+bool run_abi_cancel_before_publication_test(const fs::path& checkpoint, const fs::path& checkpoints) {
+  api_publication_gate gate;
+  api_test_seam_guard seam(gate);
+  const auto wav_path = checkpoints / L"abi-cancel-before-publication.wav";
+  zr_pcm_convert_handle handle{};
+  zr_result conversion_result{ZR_INTERNAL_ERROR};
+  std::thread conversion([&] {
+    conversion_result = zr_convert_audio_to_pcm_wav(checkpoint.c_str(), wav_path.c_str(), &handle);
+  });
+  if (!wait_for_api_publication(gate)) {
+    release_api_publication(gate);
+    conversion.join();
+    return expect(false, "ABI conversion reaches the deterministic publication gate");
+  }
+  const auto cancel_result = zr_cancel_pcm_conversion(gate.handle);
+  release_api_publication(gate);
+  conversion.join();
+  return expect(cancel_result == ZR_OK, "ABI cancellation is accepted before publication") &&
+    expect(conversion_result == ZR_CANCELLED, "ABI cancel-before-publication reports cancellation") &&
+    expect(!fs::exists(wav_path) && !fs::exists(wav_path.wstring() + L".partial"),
+      "ABI cancel-before-publication leaves no output") &&
+    expect(zr_destroy_pcm_conversion(handle) == ZR_OK, "cancelled ABI conversion handle is destroyed");
+}
+
+bool run_abi_live_destroy_wait_test(const fs::path& checkpoint, const fs::path& checkpoints) {
+  api_publication_gate gate;
+  api_test_seam_guard seam(gate);
+  const auto wav_path = checkpoints / L"abi-live-destroy.wav";
+  zr_pcm_convert_handle handle{};
+  zr_result conversion_result{ZR_INTERNAL_ERROR};
+  zr_result destroy_result{ZR_INTERNAL_ERROR};
+  std::atomic_bool destroy_finished{};
+  std::thread conversion([&] {
+    conversion_result = zr_convert_audio_to_pcm_wav(checkpoint.c_str(), wav_path.c_str(), &handle);
+  });
+  if (!wait_for_api_publication(gate)) {
+    release_api_publication(gate);
+    conversion.join();
+    return expect(false, "live-destroy conversion reaches the publication gate");
+  }
+  std::thread destroy([&] {
+    destroy_result = zr_destroy_pcm_conversion(gate.handle);
+    destroy_finished.store(true, std::memory_order_release);
+  });
+  const auto destroy_cancelled = wait_for_api_cancellation(gate);
+  const auto waited = !destroy_finished.load(std::memory_order_acquire);
+  release_api_publication(gate);
+  conversion.join();
+  destroy.join();
+  return expect(destroy_cancelled, "live ABI destroy requests cancellation") &&
+    expect(waited, "live ABI destroy waits for the conversion worker") &&
+    expect(conversion_result == ZR_CANCELLED && destroy_result == ZR_OK,
+      "live ABI destroy completes after cancelled conversion") &&
+    expect(!fs::exists(wav_path) && !fs::exists(wav_path.wstring() + L".partial"),
+      "live ABI destroy leaves no output");
+}
+
+bool run_abi_cancel_destroy_race_test(const fs::path& checkpoint, const fs::path& checkpoints) {
+  api_publication_gate gate;
+  api_test_seam_guard seam(gate);
+  const auto wav_path = checkpoints / L"abi-cancel-destroy-race.wav";
+  zr_pcm_convert_handle handle{};
+  zr_result conversion_result{ZR_INTERNAL_ERROR};
+  zr_result cancel_result{ZR_INTERNAL_ERROR};
+  zr_result destroy_result_one{ZR_INTERNAL_ERROR};
+  zr_result destroy_result_two{ZR_INTERNAL_ERROR};
+  std::atomic_bool start{};
+  std::thread conversion([&] {
+    conversion_result = zr_convert_audio_to_pcm_wav(checkpoint.c_str(), wav_path.c_str(), &handle);
+  });
+  if (!wait_for_api_publication(gate)) {
+    release_api_publication(gate);
+    conversion.join();
+    return expect(false, "race conversion reaches the publication gate");
+  }
+  const auto race_call = [&start](auto&& call) {
+    while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+    call();
+  };
+  std::thread cancel([&] { race_call([&] { cancel_result = zr_cancel_pcm_conversion(gate.handle); }); });
+  std::thread destroy_one([&] { race_call([&] { destroy_result_one = zr_destroy_pcm_conversion(gate.handle); }); });
+  std::thread destroy_two([&] { race_call([&] { destroy_result_two = zr_destroy_pcm_conversion(gate.handle); }); });
+  start.store(true, std::memory_order_release);
+  const auto cancellation_observed = wait_for_api_cancellation(gate);
+  release_api_publication(gate);
+  conversion.join();
+  cancel.join();
+  destroy_one.join();
+  destroy_two.join();
+  const auto one_destroy_owned =
+    (destroy_result_one == ZR_OK && destroy_result_two == ZR_INVALID_ARGUMENT) ||
+    (destroy_result_two == ZR_OK && destroy_result_one == ZR_INVALID_ARGUMENT);
+  return expect(cancellation_observed, "cancel/destroy race accepts cancellation before publication") &&
+    expect(conversion_result == ZR_CANCELLED, "cancel/destroy race cannot publish success") &&
+    expect(cancel_result == ZR_OK || cancel_result == ZR_INVALID_ARGUMENT,
+      "racing cancel either acquires the live request or loses to destroy") &&
+    expect(one_destroy_owned, "exactly one racing destroy owns and destroys the request") &&
+    expect(zr_destroy_pcm_conversion(handle) == ZR_INVALID_ARGUMENT,
+      "double destroy cannot reacquire request ownership") &&
+    expect(!fs::exists(wav_path) && !fs::exists(wav_path.wstring() + L".partial"),
+      "cancel/destroy race leaves no output");
+}
 }
 
 bool run_pcm_wav_converter_tests() {
   temporary_directory temporary;
   const auto source_mp4 = temporary.path / L"source.mp4";
-  const auto silent_mp4 = temporary.path / L"silent.mp4";
   const auto checkpoints = temporary.path / L"checkpoints";
+  const auto silent_mp4 = checkpoints / L"silent.mp4";
   fs::create_directories(checkpoints);
   if (!expect(create_fixture(source_mp4, 3, true), "synthetic audio fixture is created") ||
       !expect(create_fixture(silent_mp4, 1, false), "synthetic missing-audio fixture is created")) return false;
@@ -137,6 +300,16 @@ bool run_pcm_wav_converter_tests() {
       !expect(!fs::exists(cancelled_wav) && !fs::exists(cancelled_wav.wstring() + L".partial"),
         "cancellation publishes neither final nor partial WAV")) return false;
 
+  const auto commit_cancelled_wav = checkpoints / L"commit-cancelled.wav";
+  pcm_wav_conversion_cancellation commit_cancelled;
+  pcm_wav_converter_test_seam commit_cancellation_seam;
+  commit_cancellation_seam.before_commit = [&] { commit_cancelled.cancel(); };
+  pcm_wav_converter commit_cancelling_converter(commit_cancelled, &commit_cancellation_seam);
+  if (!expect(commit_cancelling_converter.convert(checkpoint, commit_cancelled_wav) ==
+        pcm_wav_conversion_result::cancelled, "cancellation accepted immediately before commit wins publication") ||
+      !expect(!fs::exists(commit_cancelled_wav) && !fs::exists(commit_cancelled_wav.wstring() + L".partial"),
+        "cancel-before-commit publishes neither final nor partial WAV")) return false;
+
   pcm_wav_conversion_cancellation failure_cancellation;
   pcm_wav_converter failure_converter(failure_cancellation);
   const auto missing_wav = checkpoints / L"missing.wav";
@@ -164,6 +337,11 @@ bool run_pcm_wav_converter_tests() {
       !expect(!fs::exists(partial_collision_wav) && fs::file_size(partial_collision) == 8,
         "partial collision preserves the other invocation's staging file")) return false;
 
+  const auto linked_job = temporary.path / L"linked-job";
+  if (!expect(create_junction(linked_job, checkpoints), "job-directory junction fixture is created") ||
+      !expect(failure_converter.convert(linked_job / checkpoint.filename(), linked_job / L"linked-job.wav") ==
+        pcm_wav_conversion_result::invalid_argument, "native converter rejects a reparse-point output directory")) return false;
+
   zr_pcm_convert_handle handle{};
   const auto abi_wav = checkpoints / L"abi.wav";
   if (!expect(zr_convert_audio_to_pcm_wav(checkpoint.c_str(), abi_wav.c_str(), &handle) == ZR_OK && handle,
@@ -178,6 +356,10 @@ bool run_pcm_wav_converter_tests() {
         zr_convert_audio_to_pcm_wav(checkpoint.c_str(), abi_wav.c_str(), nullptr) == ZR_INVALID_ARGUMENT &&
         zr_cancel_pcm_conversion(nullptr) == ZR_INVALID_ARGUMENT && zr_destroy_pcm_conversion(nullptr) == ZR_INVALID_ARGUMENT,
         "ABI validates paths, handle storage, and handles")) return false;
+
+  if (!run_abi_cancel_before_publication_test(checkpoint, checkpoints) ||
+      !run_abi_live_destroy_wait_test(checkpoint, checkpoints) ||
+      !run_abi_cancel_destroy_race_test(checkpoint, checkpoints)) return false;
 
   handle = nullptr;
   const auto missing_audio_result = zr_convert_audio_to_pcm_wav(silent_mp4.c_str(), missing_wav.c_str(), &handle);

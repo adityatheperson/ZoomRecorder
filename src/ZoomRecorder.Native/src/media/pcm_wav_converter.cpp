@@ -126,14 +126,35 @@ bool is_expected_pcm_type(IMFMediaType* type) {
     SUCCEEDED(type->GetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, &alignment)) && alignment == block_alignment;
 }
 
+bool contains_reparse_point(const fs::path& path) {
+  auto current = path.root_path();
+  auto attributes = GetFileAttributesW(current.c_str());
+  if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return true;
+
+  for (const auto& component : path.relative_path()) {
+    current /= component;
+    attributes = GetFileAttributesW(current.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) return false;
+    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return true;
+  }
+  return false;
+}
+
 }
 
 void pcm_wav_conversion_cancellation::cancel() noexcept {
+  std::scoped_lock lock(publication_mutex_);
   cancelled_.store(true, std::memory_order_release);
 }
 
 bool pcm_wav_conversion_cancellation::is_cancelled() const noexcept {
   return cancelled_.load(std::memory_order_acquire);
+}
+
+pcm_wav_publication_result pcm_wav_conversion_cancellation::publish(const std::function<bool()>& commit) {
+  std::scoped_lock lock(publication_mutex_);
+  if (cancelled_.load(std::memory_order_acquire)) return pcm_wav_publication_result::cancelled;
+  return commit() ? pcm_wav_publication_result::published : pcm_wav_publication_result::failed;
 }
 
 pcm_wav_converter::pcm_wav_converter(
@@ -146,6 +167,8 @@ pcm_wav_conversion_result pcm_wav_converter::convert(
     const std::filesystem::path& wav_path) const {
   if (m4a_path.empty() || wav_path.empty() || !m4a_path.is_absolute() || !wav_path.is_absolute())
     return pcm_wav_conversion_result::invalid_argument;
+  if (contains_reparse_point(m4a_path) || contains_reparse_point(wav_path.parent_path()))
+    return pcm_wav_conversion_result::invalid_argument;
 
   std::filesystem::path canonical_input, canonical_output;
   try {
@@ -153,7 +176,8 @@ pcm_wav_conversion_result pcm_wav_converter::convert(
     const auto canonical_parent = std::filesystem::canonical(wav_path.parent_path());
     canonical_output = canonical_parent / wav_path.filename();
     if (!std::filesystem::is_regular_file(canonical_input) || !std::filesystem::is_directory(canonical_parent) ||
-        canonical_input == canonical_output) return pcm_wav_conversion_result::invalid_argument;
+        canonical_input.parent_path() != canonical_parent || canonical_input == canonical_output)
+      return pcm_wav_conversion_result::invalid_argument;
   } catch (const std::filesystem::filesystem_error&) {
     return pcm_wav_conversion_result::invalid_argument;
   }
@@ -241,9 +265,13 @@ pcm_wav_conversion_result pcm_wav_converter::convert(
   if (cancellation_.is_cancelled()) return pcm_wav_conversion_result::cancelled;
   if (test_seam_ && test_seam_->before_publish) test_seam_->before_publish(partial_path, canonical_output);
   if (cancellation_.is_cancelled()) return pcm_wav_conversion_result::cancelled;
-  if (std::filesystem::exists(canonical_output, file_error) || file_error ||
-      !MoveFileExW(partial_path.c_str(), canonical_output.c_str(), MOVEFILE_WRITE_THROUGH))
-    return pcm_wav_conversion_result::io_failure;
+  if (test_seam_ && test_seam_->before_commit) test_seam_->before_commit();
+  const auto publication = cancellation_.publish([&] {
+    return !std::filesystem::exists(canonical_output, file_error) && !file_error &&
+      MoveFileExW(partial_path.c_str(), canonical_output.c_str(), MOVEFILE_WRITE_THROUGH) != FALSE;
+  });
+  if (publication == pcm_wav_publication_result::cancelled) return pcm_wav_conversion_result::cancelled;
+  if (publication == pcm_wav_publication_result::failed) return pcm_wav_conversion_result::io_failure;
   partial_guard.release();
   return pcm_wav_conversion_result::success;
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ZoomRecorder.App.Interop;
 using ZoomRecorder.App.LocalTranscription;
 using ZoomRecorder.Core.Processing;
@@ -65,7 +66,7 @@ public sealed class NativeLocalPcmAudioConverterTests
     [InlineData(7, typeof(IOException))]
     [InlineData(2, typeof(InvalidOperationException))]
     [InlineData(3, typeof(InvalidOperationException))]
-    public async Task Native_errors_map_to_stable_managed_exceptions_and_remove_transient_outputs(
+    public async Task Native_errors_map_to_stable_managed_exceptions_without_deleting_collision_files(
         int resultCode,
         Type exceptionType)
     {
@@ -85,13 +86,13 @@ public sealed class NativeLocalPcmAudioConverterTests
             files.Chunk, files.JobDirectory, CancellationToken.None));
 
         Assert.Contains(result.ToString(), exception.Message, StringComparison.Ordinal);
-        Assert.False(File.Exists(native.LastWavPath));
-        Assert.False(File.Exists(native.LastWavPath + ".partial"));
+        Assert.Equal("final", File.ReadAllText(native.LastWavPath));
+        Assert.Equal("partial", File.ReadAllText(native.LastWavPath + ".partial"));
         Assert.Equal(1, native.DestroyCalls);
     }
 
     [Fact]
-    public async Task Managed_native_exception_still_destroys_the_handle_and_removes_transient_outputs()
+    public async Task Managed_native_exception_still_destroys_the_handle_without_deleting_unowned_outputs()
     {
         using var files = new TestFiles();
         var native = new FakeNativePcmApi
@@ -110,8 +111,29 @@ public sealed class NativeLocalPcmAudioConverterTests
 
         Assert.Equal("native adapter failure", exception.Message);
         Assert.Equal(1, native.DestroyCalls);
+        Assert.Equal("final", File.ReadAllText(native.LastWavPath));
+        Assert.Equal("partial", File.ReadAllText(native.LastWavPath + ".partial"));
+    }
+
+    [Fact]
+    public async Task Invalid_successful_result_removes_only_the_owned_final_and_preserves_a_foreign_partial()
+    {
+        using var files = new TestFiles();
+        var native = new FakeNativePcmApi
+        {
+            Behavior = call =>
+            {
+                File.WriteAllBytes(call.WavPath, new byte[43]);
+                File.WriteAllText(call.WavPath + ".partial", "foreign partial");
+                return ZrResult.Ok;
+            }
+        };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => new NativeLocalPcmAudioConverter(native).ConvertAsync(
+            files.Chunk, files.JobDirectory, CancellationToken.None));
+
         Assert.False(File.Exists(native.LastWavPath));
-        Assert.False(File.Exists(native.LastWavPath + ".partial"));
+        Assert.Equal("foreign partial", File.ReadAllText(native.LastWavPath + ".partial"));
     }
 
     [Fact]
@@ -187,6 +209,56 @@ public sealed class NativeLocalPcmAudioConverterTests
             files.Chunk, files.JobDirectory, cancelled.Token));
 
         Assert.Equal(0, native.ConvertCalls);
+    }
+
+    [Fact]
+    public async Task Reparse_point_job_directory_and_m4a_leaf_are_rejected_before_native_code()
+    {
+        using var files = new TestFiles();
+        var native = new FakeNativePcmApi();
+        var converter = new NativeLocalPcmAudioConverter(native);
+        var linkedCheckpoint = Path.Combine(files.JobDirectory, "linked.m4a");
+        var linkedCheckpointTarget = Path.Combine(files.Root, "linked-checkpoint-target");
+        Directory.CreateDirectory(linkedCheckpointTarget);
+        CreateJunction(linkedCheckpoint, linkedCheckpointTarget);
+        var linkedJob = Path.Combine(files.Root, "linked-job");
+        CreateJunction(linkedJob, files.JobDirectory);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => converter.ConvertAsync(
+                files.Chunk with { Path = linkedCheckpoint }, files.JobDirectory, CancellationToken.None));
+
+            var sourceThroughLinkedJob = Path.Combine(linkedJob, Path.GetFileName(files.Chunk.Path));
+            await Assert.ThrowsAsync<ArgumentException>(() => converter.ConvertAsync(
+                files.Chunk with { Path = sourceThroughLinkedJob }, linkedJob, CancellationToken.None));
+
+            Assert.Equal(0, native.ConvertCalls);
+        }
+        finally
+        {
+            Directory.Delete(linkedCheckpoint);
+            Directory.Delete(linkedJob);
+        }
+    }
+
+    private static void CreateJunction(string junctionPath, string targetPath)
+    {
+        var startInfo = new ProcessStartInfo("cmd.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(junctionPath);
+        startInfo.ArgumentList.Add(targetPath);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start junction fixture creation.");
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
     }
 
     private static void WritePcmWav(string path, Action<byte[]>? mutate = null)

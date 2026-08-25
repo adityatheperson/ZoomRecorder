@@ -68,6 +68,21 @@ std::shared_ptr<audio_preparation> acquire_audio_preparation(zr_audio_prepare_ha
 std::mutex pcm_conversion_registry_mutex;
 std::unordered_map<zr_pcm_convert_handle, std::shared_ptr<pcm_conversion>> pcm_conversion_registry;
 
+std::mutex pcm_wav_api_test_seam_mutex;
+pcm_wav_api_test_seam pcm_wav_api_test_seam_value{};
+
+pcm_wav_api_test_seam pcm_wav_api_test_seam_snapshot() {
+  std::scoped_lock lock(pcm_wav_api_test_seam_mutex);
+  return pcm_wav_api_test_seam_value;
+}
+
+void notify_pcm_wav_api_cancelled(zr_pcm_convert_handle handle) noexcept {
+  const auto seam = pcm_wav_api_test_seam_snapshot();
+  if (!seam.after_cancel) return;
+  try { seam.after_cancel(handle, seam.context); }
+  catch (...) {}
+}
+
 zr_pcm_convert_handle register_pcm_conversion(const std::shared_ptr<pcm_conversion>& conversion) {
   std::scoped_lock lock(pcm_conversion_registry_mutex);
   const auto handle = static_cast<zr_pcm_convert_handle>(next_handle());
@@ -108,6 +123,11 @@ zr_result map_pcm_result(pcm_wav_conversion_result result) {
   }
   return ZR_INTERNAL_ERROR;
 }
+}
+
+extern "C" void zr_set_pcm_wav_api_test_seam(const pcm_wav_api_test_seam* seam) {
+  std::scoped_lock lock(pcm_wav_api_test_seam_mutex);
+  pcm_wav_api_test_seam_value = seam ? *seam : pcm_wav_api_test_seam{};
 }
 
 zr_result zr_create(zr_handle* out_handle) {
@@ -262,7 +282,16 @@ zr_result zr_convert_audio_to_pcm_wav(
     conversion->worker = std::this_thread::get_id();
     const auto handle = register_pcm_conversion(conversion);
     InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(out_handle), handle);
-    pcm_wav_converter converter(conversion->cancellation);
+    const auto api_test_seam = pcm_wav_api_test_seam_snapshot();
+    pcm_wav_converter_test_seam converter_test_seam;
+    if (api_test_seam.before_commit) {
+      converter_test_seam.before_commit = [handle, api_test_seam] {
+        api_test_seam.before_commit(handle, api_test_seam.context);
+      };
+    }
+    pcm_wav_converter converter(
+      conversion->cancellation,
+      api_test_seam.before_commit ? &converter_test_seam : nullptr);
     const auto result = converter.convert(m4a_path, wav_path);
     {
       std::scoped_lock lock(conversion->mutex);
@@ -287,6 +316,7 @@ zr_result zr_cancel_pcm_conversion(zr_pcm_convert_handle handle) {
   const auto conversion = acquire_pcm_conversion(handle);
   if (!conversion) return ZR_INVALID_ARGUMENT;
   conversion->cancellation.cancel();
+  notify_pcm_wav_api_cancelled(handle);
   return ZR_OK;
 }
 
@@ -303,6 +333,7 @@ zr_result zr_destroy_pcm_conversion(zr_pcm_convert_handle handle) {
     pcm_conversion_registry.erase(found);
   }
   conversion->cancellation.cancel();
+  notify_pcm_wav_api_cancelled(handle);
   std::unique_lock lock(conversion->mutex);
   conversion->finished.wait(lock, [conversion] { return !conversion->active; });
   return ZR_OK;
