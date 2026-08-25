@@ -148,6 +148,46 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Successful_recording_deletion_removes_the_item_from_the_visible_list()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("delete-me.mp4", BiologyId, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+
+        var deleted = await viewModel.DeleteAsync(
+            item,
+            (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.Empty(viewModel.Recordings);
+        Assert.Null(viewModel.DeletionErrorMessage);
+    }
+
+    [Fact]
+    public async Task Failed_recording_deletion_keeps_the_item_and_shows_a_sanitized_retry_message()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("locked.mp4", BiologyId, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+
+        var deleted = await viewModel.DeleteAsync(
+            item,
+            (_, _) => Task.FromException(new IOException("C:\\secret\\locked.mp4")),
+            CancellationToken.None);
+
+        Assert.False(deleted);
+        Assert.Same(item, Assert.Single(viewModel.Recordings));
+        Assert.Equal("The recording could not be deleted. Close any app using its files and try again.",
+            viewModel.DeletionErrorMessage);
+        Assert.DoesNotContain("secret", viewModel.DeletionErrorMessage);
+    }
+
+    [Fact]
     public async Task Class_detail_loads_only_its_class_lectures()
     {
         var repository = SeedTwoClasses();

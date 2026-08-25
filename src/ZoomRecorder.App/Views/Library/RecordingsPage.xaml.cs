@@ -9,6 +9,7 @@ public sealed partial class RecordingsPage : Page
 {
     private readonly RecordingsViewModel? _viewModel;
     private readonly Func<RecordingRecord, CancellationToken, Task<bool>>? _assignment;
+    private readonly Func<RecordingRecord, CancellationToken, Task>? _deletion;
     private readonly Action _recordClass;
     private readonly Func<Task> _retry;
 
@@ -17,11 +18,13 @@ public sealed partial class RecordingsPage : Page
         Func<RecordingRecord, CancellationToken, Task<bool>>? assignment,
         Action recordClass,
         Func<Task> retry,
-        bool isLoading = false)
+        bool isLoading = false,
+        Func<RecordingRecord, CancellationToken, Task>? deletion = null)
     {
         InitializeComponent();
         _viewModel = viewModel;
         _assignment = assignment;
+        _deletion = deletion;
         _recordClass = recordClass ?? throw new ArgumentNullException(nameof(recordClass));
         _retry = retry ?? throw new ArgumentNullException(nameof(retry));
         DataContext = viewModel;
@@ -81,6 +84,32 @@ public sealed partial class RecordingsPage : Page
         UpdateListState();
     }
 
+    private async void DeleteClicked(object sender, RoutedEventArgs args)
+    {
+        if (_viewModel is null || _deletion is null ||
+            ((FrameworkElement)sender).DataContext is not RecordingListItem item)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "Delete recording?",
+            Content = $"Permanently delete {item.FileName} and all associated study materials? This cannot be undone.",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await _viewModel.DeleteAsync(item, _deletion, CancellationToken.None);
+        UpdateListState();
+    }
+
     private void UpdateListState()
     {
         var showLibrary = _viewModel is not null && _viewModel.ErrorMessage is null;
@@ -88,6 +117,9 @@ public sealed partial class RecordingsPage : Page
         RecordingsList.Visibility = hasItems ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanel.Visibility = showLibrary && !hasItems ? Visibility.Visible : Visibility.Collapsed;
         AssignmentErrorPanel.Visibility = showLibrary && _viewModel!.CanRetryAssignment
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        DeletionErrorPanel.Visibility = showLibrary && _viewModel!.DeletionErrorMessage is not null
             ? Visibility.Visible
             : Visibility.Collapsed;
     }

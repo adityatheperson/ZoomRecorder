@@ -7,11 +7,14 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
 {
     private const string AssignmentUnavailableMessage =
         "Assignment is unavailable right now. Try again.";
+    private const string DeletionUnavailableMessage =
+        "The recording could not be deleted. Close any app using its files and try again.";
 
     private readonly ILibraryRepository _repository;
     private readonly Func<Guid, CancellationToken, Task<string>> processingStatus;
     private RecordingListItem? _assignmentRetryItem;
     private string? _assignmentErrorMessage;
+    private string? _deletionErrorMessage;
 
     public RecordingsViewModel(
         ILibraryRepository repository,
@@ -24,6 +27,7 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
     public ObservableCollection<RecordingListItem> Recordings { get; } = [];
     public string? AssignmentErrorMessage => _assignmentErrorMessage;
     public bool CanRetryAssignment => _assignmentRetryItem is not null;
+    public string? DeletionErrorMessage => _deletionErrorMessage;
 
     public Task LoadAsync(CancellationToken cancellationToken) =>
         LoadQueryAsync(query: null, cancellationToken);
@@ -73,6 +77,34 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         return _assignmentRetryItem is null
             ? Task.FromResult(false)
             : AssignAsync(_assignmentRetryItem, assignment, cancellationToken);
+    }
+
+    public async Task<bool> DeleteAsync(
+        RecordingListItem item,
+        Func<RecordingRecord, CancellationToken, Task> deletion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(deletion);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            await deletion(item.Recording, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            Recordings.Remove(item);
+            SetDeletionError(null);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            SetDeletionError(DeletionUnavailableMessage);
+            return false;
+        }
     }
 
     private async Task LoadQueryAsync(string? query, CancellationToken cancellationToken)
@@ -143,5 +175,16 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         {
             RaisePropertyChanged(nameof(CanRetryAssignment));
         }
+    }
+
+    private void SetDeletionError(string? message)
+    {
+        if (_deletionErrorMessage == message)
+        {
+            return;
+        }
+
+        _deletionErrorMessage = message;
+        RaisePropertyChanged(nameof(DeletionErrorMessage));
     }
 }

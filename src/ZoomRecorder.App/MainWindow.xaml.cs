@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using WinRT.Interop;
 using ZoomRecorder.App.Data;
 using ZoomRecorder.App.Composition;
+using ZoomRecorder.App.Deletion;
 using ZoomRecorder.App.Interop;
 using ZoomRecorder.App.Services;
 using ZoomRecorder.App.ViewModels;
@@ -32,11 +33,13 @@ public sealed partial class MainWindow : Window, IAppNavigator
         "Your recording was saved, but the class library is unavailable right now.";
 
     private readonly AppServices _services;
+    private readonly RecordingDeletionService _recordingDeletion;
 
     public MainWindow(AppServices services)
     {
         InitializeComponent();
         _services = services ?? throw new ArgumentNullException(nameof(services));
+        _recordingDeletion = new RecordingDeletionService(services.Database, services.Paths);
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
@@ -209,7 +212,9 @@ public sealed partial class MainWindow : Window, IAppNavigator
                     recording,
                     cancellationToken),
                 ShowJoin,
-                RetryRecordingsAsync);
+                RetryRecordingsAsync,
+                deletion: (recording, cancellationToken) =>
+                    _recordingDeletion.DeleteAsync(recording.Id, cancellationToken));
         }
     }
 

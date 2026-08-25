@@ -26,13 +26,18 @@
             <Button Grid.Column="1" Content="Search" Click="SearchClicked" />
         </Grid>
 
-        <Border Grid.Row="2" x:Name="AssignmentErrorPanel" Margin="0,0,0,12" Padding="14" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed">
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding AssignmentErrorMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Content="Retry assignment" Click="RetryAssignmentClicked" />
-            </Grid>
-        </Border>
+        <StackPanel Grid.Row="2" Spacing="8" Margin="0,0,0,12">
+            <Border x:Name="AssignmentErrorPanel" Padding="14" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Visibility="Collapsed">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding AssignmentErrorMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Content="Retry assignment" Click="RetryAssignmentClicked" />
+                </Grid>
+            </Border>
+            <Border x:Name="DeletionErrorPanel" Padding="14" CornerRadius="10" Background="#FFFFE8E8" Visibility="Collapsed">
+                <TextBlock Text="{Binding DeletionErrorMessage}" TextWrapping="Wrap" Foreground="#FF8A1C1C" />
+            </Border>
+        </StackPanel>
 
         <StackPanel Grid.Row="3" x:Name="LoadingPanel" Orientation="Horizontal" Spacing="10">
             <ProgressRing IsActive="True" Width="20" Height="20" />
@@ -66,6 +71,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="3">
                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -79,6 +85,7 @@
                         <TextBlock Grid.Column="2" Text="{x:Bind ProcessingStatus}" VerticalAlignment="Center"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <Button Grid.Column="3" Content="Assign to class" Click="AssignClicked" VerticalAlignment="Center" />
+                        <Button Grid.Column="4" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center" Foreground="#FFC42B1C" />
                     </Grid>
                 </DataTemplate>
             </ListView.ItemTemplate>
