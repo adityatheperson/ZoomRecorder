@@ -79,22 +79,23 @@ jobs:
       - name: Run native Release tests
         run: ctest --test-dir artifacts/native-release -C Release --output-on-failure
 
-      - name: Build Windows application (Release)
-        run: >-
-          msbuild src/ZoomRecorder.App/ZoomRecorder.App.csproj
-          /t:Build
-          /p:Configuration=Release
-          /p:Platform=x64
-          /p:RuntimeIdentifier=win-x64
-          /m
-          /v:minimal
+      - name: Publish Windows application (Release)
+        shell: pwsh
+        run: |
+          $release = Join-Path $PWD 'artifacts/release'
+          msbuild src/ZoomRecorder.App/ZoomRecorder.App.csproj `
+            /t:Publish `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:RuntimeIdentifier=win-x64 `
+            "/p:PublishDir=$release\" `
+            /m `
+            /v:minimal
 
       - name: Verify SDK-free Release payload
         shell: pwsh
         run: |
           $release = 'artifacts/release'
-          New-Item -ItemType Directory -Path $release -Force | Out-Null
-          Copy-Item 'src/ZoomRecorder.App/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/*' $release -Recurse
           Copy-Item 'artifacts/native-release/Release/ZoomRecorder.Native.dll' $release -Force
           ./eng/Verify-Release.ps1 -ReleaseDirectory $release
 
