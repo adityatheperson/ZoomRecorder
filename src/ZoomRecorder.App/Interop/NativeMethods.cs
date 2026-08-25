@@ -54,4 +54,11 @@ internal static partial class NativeMethods
         nint* outHandle);
     [LibraryImport(Library)] internal static partial ZrResult zr_cancel_audio_preparation(nint handle);
     [LibraryImport(Library)] internal static partial ZrResult zr_destroy_audio_preparation(nint handle);
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf16)]
+    internal static unsafe partial ZrResult zr_convert_audio_to_pcm_wav(
+        string m4aPath,
+        string wavPath,
+        nint* outHandle);
+    [LibraryImport(Library)] internal static partial ZrResult zr_cancel_pcm_conversion(nint handle);
+    [LibraryImport(Library)] internal static partial ZrResult zr_destroy_pcm_conversion(nint handle);
 }

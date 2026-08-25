@@ -9,6 +9,7 @@
 #include <thread>
 #include <unordered_map>
 #include "media/audio_chunk_exporter.h"
+#include "media/pcm_wav_converter.h"
 #include "media/recording_pipeline.h"
 
 namespace {
@@ -28,16 +29,32 @@ struct audio_preparation {
   std::thread::id worker;
 };
 
+struct pcm_conversion {
+  std::mutex mutex;
+  std::condition_variable finished;
+  pcm_wav_conversion_cancellation cancellation;
+  bool active{true};
+  std::thread::id worker;
+};
+
+std::mutex request_handle_mutex;
+std::uintptr_t next_request_handle{1};
+
+void* next_handle() {
+  std::scoped_lock lock(request_handle_mutex);
+  void* handle{};
+  do {
+    handle = reinterpret_cast<void*>(next_request_handle++);
+  } while (!handle);
+  return handle;
+}
+
 std::mutex audio_preparation_registry_mutex;
 std::unordered_map<zr_audio_prepare_handle, std::shared_ptr<audio_preparation>> audio_preparation_registry;
-std::uintptr_t next_audio_preparation_handle{1};
 
 zr_audio_prepare_handle register_audio_preparation(const std::shared_ptr<audio_preparation>& preparation) {
   std::scoped_lock lock(audio_preparation_registry_mutex);
-  zr_audio_prepare_handle handle{};
-  do {
-    handle = reinterpret_cast<zr_audio_prepare_handle>(next_audio_preparation_handle++);
-  } while (!handle || audio_preparation_registry.contains(handle));
+  const auto handle = static_cast<zr_audio_prepare_handle>(next_handle());
   audio_preparation_registry.emplace(handle, preparation);
   return handle;
 }
@@ -46,6 +63,22 @@ std::shared_ptr<audio_preparation> acquire_audio_preparation(zr_audio_prepare_ha
   std::scoped_lock lock(audio_preparation_registry_mutex);
   const auto found = audio_preparation_registry.find(handle);
   return found == audio_preparation_registry.end() ? nullptr : found->second;
+}
+
+std::mutex pcm_conversion_registry_mutex;
+std::unordered_map<zr_pcm_convert_handle, std::shared_ptr<pcm_conversion>> pcm_conversion_registry;
+
+zr_pcm_convert_handle register_pcm_conversion(const std::shared_ptr<pcm_conversion>& conversion) {
+  std::scoped_lock lock(pcm_conversion_registry_mutex);
+  const auto handle = static_cast<zr_pcm_convert_handle>(next_handle());
+  pcm_conversion_registry.emplace(handle, conversion);
+  return handle;
+}
+
+std::shared_ptr<pcm_conversion> acquire_pcm_conversion(zr_pcm_convert_handle handle) {
+  std::scoped_lock lock(pcm_conversion_registry_mutex);
+  const auto found = pcm_conversion_registry.find(handle);
+  return found == pcm_conversion_registry.end() ? nullptr : found->second;
 }
 
 void emit(session& value, const char* json) {
@@ -60,6 +93,18 @@ zr_result map_audio_result(audio_chunk_export_result result) {
     case audio_chunk_export_result::cancelled: return ZR_CANCELLED;
     case audio_chunk_export_result::media_failure: return ZR_MEDIA_ERROR;
     case audio_chunk_export_result::io_failure: return ZR_IO_ERROR;
+  }
+  return ZR_INTERNAL_ERROR;
+}
+
+zr_result map_pcm_result(pcm_wav_conversion_result result) {
+  switch (result) {
+    case pcm_wav_conversion_result::success: return ZR_OK;
+    case pcm_wav_conversion_result::invalid_argument: return ZR_INVALID_ARGUMENT;
+    case pcm_wav_conversion_result::missing_audio: return ZR_AUDIO_STREAM_MISSING;
+    case pcm_wav_conversion_result::cancelled: return ZR_CANCELLED;
+    case pcm_wav_conversion_result::media_failure: return ZR_MEDIA_ERROR;
+    case pcm_wav_conversion_result::io_failure: return ZR_IO_ERROR;
   }
   return ZR_INTERNAL_ERROR;
 }
@@ -201,5 +246,64 @@ zr_result zr_destroy_audio_preparation(zr_audio_prepare_handle handle) {
   preparation->cancellation.cancel();
   std::unique_lock lock(preparation->mutex);
   preparation->finished.wait(lock, [preparation] { return !preparation->active; });
+  return ZR_OK;
+}
+
+zr_result zr_convert_audio_to_pcm_wav(
+    const wchar_t* m4a_path,
+    const wchar_t* wav_path,
+    zr_pcm_convert_handle* out_handle) {
+  if (!out_handle) return ZR_INVALID_ARGUMENT;
+  *out_handle = nullptr;
+  if (!m4a_path || !*m4a_path || !wav_path || !*wav_path) return ZR_INVALID_ARGUMENT;
+  std::shared_ptr<pcm_conversion> conversion;
+  try {
+    conversion = std::make_shared<pcm_conversion>();
+    conversion->worker = std::this_thread::get_id();
+    const auto handle = register_pcm_conversion(conversion);
+    InterlockedExchangePointer(reinterpret_cast<PVOID volatile*>(out_handle), handle);
+    pcm_wav_converter converter(conversion->cancellation);
+    const auto result = converter.convert(m4a_path, wav_path);
+    {
+      std::scoped_lock lock(conversion->mutex);
+      conversion->active = false;
+    }
+    conversion->finished.notify_all();
+    return map_pcm_result(result);
+  } catch (...) {
+    if (conversion) {
+      {
+        std::scoped_lock lock(conversion->mutex);
+        conversion->active = false;
+      }
+      conversion->finished.notify_all();
+    }
+    return ZR_INTERNAL_ERROR;
+  }
+}
+
+zr_result zr_cancel_pcm_conversion(zr_pcm_convert_handle handle) {
+  if (!handle) return ZR_INVALID_ARGUMENT;
+  const auto conversion = acquire_pcm_conversion(handle);
+  if (!conversion) return ZR_INVALID_ARGUMENT;
+  conversion->cancellation.cancel();
+  return ZR_OK;
+}
+
+zr_result zr_destroy_pcm_conversion(zr_pcm_convert_handle handle) {
+  if (!handle) return ZR_INVALID_ARGUMENT;
+  std::shared_ptr<pcm_conversion> conversion;
+  {
+    std::scoped_lock registry_lock(pcm_conversion_registry_mutex);
+    const auto found = pcm_conversion_registry.find(handle);
+    if (found == pcm_conversion_registry.end()) return ZR_INVALID_ARGUMENT;
+    conversion = found->second;
+    std::scoped_lock conversion_lock(conversion->mutex);
+    if (conversion->active && conversion->worker == std::this_thread::get_id()) return ZR_INVALID_STATE;
+    pcm_conversion_registry.erase(found);
+  }
+  conversion->cancellation.cancel();
+  std::unique_lock lock(conversion->mutex);
+  conversion->finished.wait(lock, [conversion] { return !conversion->active; });
   return ZR_OK;
 }

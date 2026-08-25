@@ -10,6 +10,7 @@
 extern "C" {
 typedef void* zr_handle;
 typedef void* zr_audio_prepare_handle;
+typedef void* zr_pcm_convert_handle;
 typedef void(__stdcall* zr_event_callback)(const char* json, void* context);
 
 enum zr_result {
@@ -52,4 +53,10 @@ ZR_API zr_result zr_prepare_audio_chunks(
     zr_audio_prepare_handle* out_handle);
 ZR_API zr_result zr_cancel_audio_preparation(zr_audio_prepare_handle handle);
 ZR_API zr_result zr_destroy_audio_preparation(zr_audio_prepare_handle handle);
+ZR_API zr_result zr_convert_audio_to_pcm_wav(
+    const wchar_t* m4a_path,
+    const wchar_t* wav_path,
+    zr_pcm_convert_handle* out_handle);
+ZR_API zr_result zr_cancel_pcm_conversion(zr_pcm_convert_handle handle);
+ZR_API zr_result zr_destroy_pcm_conversion(zr_pcm_convert_handle handle);
 }
