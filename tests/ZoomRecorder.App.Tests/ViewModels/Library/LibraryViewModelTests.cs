@@ -188,11 +188,44 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Duplicate_recording_deletion_is_ignored_while_the_first_request_is_running()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("one-delete.mp4", BiologyId, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        async Task Delete(RecordingRecord _, CancellationToken cancellationToken)
+        {
+            calls++;
+            if (calls == 1)
+            {
+                started.SetResult();
+                await release.Task.WaitAsync(cancellationToken);
+            }
+        }
+
+        var first = viewModel.DeleteAsync(item, Delete, CancellationToken.None);
+        await started.Task;
+        var duplicate = await viewModel.DeleteAsync(item, Delete, CancellationToken.None);
+        release.SetResult();
+
+        Assert.False(duplicate);
+        Assert.True(await first);
+        Assert.Equal(1, calls);
+        Assert.Null(viewModel.DeletionErrorMessage);
+    }
+
+    [Fact]
     public async Task Deleting_an_assignment_retry_item_clears_the_stale_retry_action()
     {
         var repository = new TestLibraryRepository();
         repository.Recordings.Add(Recording("retry-then-delete.mp4", null, Now));
-        var viewModel = new RecordingsViewModel(repository);
+        var status = "Not transcribed";
+        var viewModel = new RecordingsViewModel(repository, (_, _) => Task.FromResult(status));
         await viewModel.LoadAsync(CancellationToken.None);
         var item = Assert.Single(viewModel.Recordings);
         await viewModel.AssignAsync(
@@ -201,7 +234,12 @@ public sealed class LibraryViewModelTests
             CancellationToken.None);
         Assert.True(viewModel.CanRetryAssignment);
 
-        await viewModel.DeleteAsync(item, (_, _) => Task.CompletedTask, CancellationToken.None);
+        status = "Ready";
+        await viewModel.LoadAsync(CancellationToken.None);
+        var refreshedItem = Assert.Single(viewModel.Recordings);
+        Assert.NotEqual(item, refreshedItem);
+
+        await viewModel.DeleteAsync(refreshedItem, (_, _) => Task.CompletedTask, CancellationToken.None);
 
         Assert.False(viewModel.CanRetryAssignment);
         Assert.Null(viewModel.AssignmentErrorMessage);

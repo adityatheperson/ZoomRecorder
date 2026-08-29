@@ -5,12 +5,28 @@ namespace ZoomRecorder.App.Deletion;
 
 internal interface IRecordingDeletionFileSystem
 {
-    Task DeleteAsync(
+    Task<IStagedRecordingDeletion> StageAsync(
         string videoPath,
         string recordingArtifacts,
         IReadOnlyList<string> jobDirectories,
         string? classGuidePath,
         CancellationToken cancellationToken);
+}
+
+internal interface IStagedRecordingDeletion
+{
+    void Rollback();
+    void Purge();
+}
+
+internal interface IRecordingDeletionFileOperations
+{
+    bool FileExists(string path);
+    bool DirectoryExists(string path);
+    void MoveFile(string source, string destination);
+    void MoveDirectory(string source, string destination);
+    void DeleteFile(string path);
+    void DeleteDirectory(string path);
 }
 
 public sealed class RecordingDeletionService
@@ -42,13 +58,31 @@ public sealed class RecordingDeletionService
         {
             var plan = await LoadPlanAsync(recordingId, cancellationToken);
             var targets = ValidateAndCollectTargets(plan);
-            await fileSystem.DeleteAsync(
+            var staged = await fileSystem.StageAsync(
                 targets.VideoPath,
                 targets.RecordingArtifacts,
                 targets.JobDirectories,
                 targets.ClassGuidePath,
                 cancellationToken);
-            await DeleteDatabaseRowsAsync(plan, cancellationToken);
+            try
+            {
+                await DeleteDatabaseRowsAsync(plan, CancellationToken.None);
+            }
+            catch (Exception databaseFailure)
+            {
+                try
+                {
+                    staged.Rollback();
+                }
+                catch (Exception rollbackFailure)
+                {
+                    throw new AggregateException(databaseFailure, rollbackFailure);
+                }
+
+                throw;
+            }
+
+            staged.Purge();
         }
         finally
         {
@@ -105,7 +139,42 @@ public sealed class RecordingDeletionService
             classGuidePath = await guide.ExecuteScalarAsync(cancellationToken) as string;
         }
 
-        return new DeletionPlan(recordingId, classId, videoPath, fileName, jobDirectories, classGuidePath);
+        var artifactPaths = new List<PersistedArtifactPath>();
+        await using (var artifacts = database.Connection.CreateCommand())
+        {
+            artifacts.CommandText = """
+                SELECT 'job', jobs.id, chunks.artifact_path
+                FROM audio_chunks chunks
+                JOIN processing_jobs jobs ON jobs.id = chunks.job_id
+                WHERE jobs.recording_id = $recordingId AND chunks.artifact_path IS NOT NULL
+                UNION ALL
+                SELECT 'job', jobs.id, chunks.artifact_path
+                FROM transcription_chunks chunks
+                JOIN processing_jobs jobs ON jobs.id = chunks.job_id
+                WHERE jobs.recording_id = $recordingId AND chunks.artifact_path IS NOT NULL
+                UNION ALL
+                SELECT 'job', jobs.id, transcripts.artifact_path
+                FROM processing_transcripts transcripts
+                JOIN processing_jobs jobs ON jobs.id = transcripts.job_id
+                WHERE jobs.recording_id = $recordingId
+                UNION ALL
+                SELECT 'recording', $recordingId, packages.artifact_path
+                FROM lecture_packages packages
+                WHERE packages.recording_id = $recordingId;
+                """;
+            artifacts.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            await using var reader = await artifacts.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                artifactPaths.Add(new PersistedArtifactPath(
+                    reader.GetString(0) == "job" ? ArtifactOwner.Job : ArtifactOwner.Recording,
+                    Guid.ParseExact(reader.GetString(1), "D"),
+                    reader.GetString(2)));
+            }
+        }
+
+        return new DeletionPlan(
+            recordingId, classId, videoPath, fileName, jobDirectories, artifactPaths, classGuidePath);
     }
 
     private DeletionTargets ValidateAndCollectTargets(DeletionPlan plan)
@@ -138,6 +207,19 @@ public sealed class RecordingDeletionService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        foreach (var artifact in plan.ArtifactPaths)
+        {
+            var expectedDirectory = artifact.Owner switch
+            {
+                ArtifactOwner.Job => ValidateChildDirectory(
+                    paths.JobsRoot,
+                    Path.Combine(paths.JobsRoot, GuidText(artifact.OwnerId))),
+                ArtifactOwner.Recording when artifact.OwnerId == plan.RecordingId => recordingArtifacts,
+                _ => throw new InvalidDataException("An artifact does not match its recording owner.")
+            };
+            ValidateFileWithinDirectory(expectedDirectory, artifact.Path);
+        }
+
         string? classGuidePath = null;
         if (!string.IsNullOrWhiteSpace(plan.ClassGuidePath) && plan.ClassId is { } classId)
         {
@@ -148,36 +230,6 @@ public sealed class RecordingDeletionService
         }
 
         return new DeletionTargets(videoPath, recordingArtifacts, jobDirectories, classGuidePath);
-    }
-
-    private static void Preflight(DeletionTargets targets, CancellationToken cancellationToken)
-    {
-        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        AddFile(files, targets.VideoPath);
-        AddFile(files, targets.ClassGuidePath);
-        AddDirectoryFiles(files, targets.RecordingArtifacts);
-        foreach (var directory in targets.JobDirectories)
-        {
-            AddDirectoryFiles(files, directory);
-        }
-
-        foreach (var file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None);
-        }
-    }
-
-    private static void DeleteFiles(DeletionTargets targets, CancellationToken cancellationToken)
-    {
-        DeleteFile(targets.VideoPath, cancellationToken);
-        DeleteFile(targets.ClassGuidePath, cancellationToken);
-        foreach (var directory in targets.JobDirectories)
-        {
-            DeleteDirectory(directory, cancellationToken);
-        }
-
-        DeleteDirectory(targets.RecordingArtifacts, cancellationToken);
     }
 
     private async Task DeleteDatabaseRowsAsync(DeletionPlan plan, CancellationToken cancellationToken)
@@ -221,45 +273,6 @@ public sealed class RecordingDeletionService
         }
     }
 
-    private static void AddFile(ISet<string> files, string? path)
-    {
-        if (path is not null && File.Exists(path))
-        {
-            files.Add(path);
-        }
-    }
-
-    private static void AddDirectoryFiles(ISet<string> files, string directory)
-    {
-        if (!Directory.Exists(directory))
-        {
-            return;
-        }
-
-        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-        {
-            files.Add(Path.GetFullPath(file));
-        }
-    }
-
-    private static void DeleteFile(string? path, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (path is not null && File.Exists(path))
-        {
-            File.Delete(path);
-        }
-    }
-
-    private static void DeleteDirectory(string path, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (Directory.Exists(path))
-        {
-            Directory.Delete(path, recursive: true);
-        }
-    }
-
     private static string ValidateChildDirectory(string root, string path)
     {
         var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
@@ -294,9 +307,18 @@ public sealed class RecordingDeletionService
         string VideoPath,
         string FileName,
         IReadOnlyList<JobDirectory> JobDirectories,
+        IReadOnlyList<PersistedArtifactPath> ArtifactPaths,
         string? ClassGuidePath);
 
     private sealed record JobDirectory(Guid JobId, string? Path);
+
+    private sealed record PersistedArtifactPath(ArtifactOwner Owner, Guid OwnerId, string Path);
+
+    private enum ArtifactOwner
+    {
+        Job,
+        Recording
+    }
 
     private sealed record DeletionTargets(
         string VideoPath,
@@ -304,20 +326,152 @@ public sealed class RecordingDeletionService
         IReadOnlyList<string> JobDirectories,
         string? ClassGuidePath);
 
-    private sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFileSystem
+}
+
+internal sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFileSystem
+{
+    private readonly IRecordingDeletionFileOperations operations;
+
+    public PhysicalRecordingDeletionFileSystem()
+        : this(new SystemRecordingDeletionFileOperations())
     {
-        public Task DeleteAsync(
-            string videoPath,
-            string recordingArtifacts,
-            IReadOnlyList<string> jobDirectories,
-            string? classGuidePath,
-            CancellationToken cancellationToken)
+    }
+
+    internal PhysicalRecordingDeletionFileSystem(IRecordingDeletionFileOperations operations)
+    {
+        this.operations = operations ?? throw new ArgumentNullException(nameof(operations));
+    }
+
+    public Task<IStagedRecordingDeletion> StageAsync(
+        string videoPath,
+        string recordingArtifacts,
+        IReadOnlyList<string> jobDirectories,
+        string? classGuidePath,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var operationId = Guid.NewGuid().ToString("N");
+        var entries = new List<StagedEntry>();
+        try
         {
-            var targets = new DeletionTargets(
-                videoPath, recordingArtifacts, jobDirectories, classGuidePath);
-            Preflight(targets, cancellationToken);
-            DeleteFiles(targets, cancellationToken);
-            return Task.CompletedTask;
+            StageFile(videoPath, operationId, entries);
+            if (classGuidePath is not null)
+            {
+                StageFile(classGuidePath, operationId, entries);
+            }
+
+            foreach (var jobDirectory in jobDirectories)
+            {
+                StageDirectory(jobDirectory, operationId, entries);
+            }
+
+            StageDirectory(recordingArtifacts, operationId, entries);
+            return Task.FromResult<IStagedRecordingDeletion>(
+                new StagedRecordingDeletion(operations, entries));
         }
+        catch (Exception stagingFailure)
+        {
+            try
+            {
+                StagedRecordingDeletion.Rollback(operations, entries);
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(stagingFailure, rollbackFailure);
+            }
+
+            throw;
+        }
+    }
+
+    private void StageFile(string source, string operationId, ICollection<StagedEntry> entries)
+    {
+        if (!operations.FileExists(source))
+        {
+            return;
+        }
+
+        var destination = QuarantinePath(source, operationId);
+        operations.MoveFile(source, destination);
+        entries.Add(new StagedEntry(source, destination, IsDirectory: false));
+    }
+
+    private void StageDirectory(string source, string operationId, ICollection<StagedEntry> entries)
+    {
+        if (!operations.DirectoryExists(source))
+        {
+            return;
+        }
+
+        var destination = QuarantinePath(source, operationId);
+        operations.MoveDirectory(source, destination);
+        entries.Add(new StagedEntry(source, destination, IsDirectory: true));
+    }
+
+    private static string QuarantinePath(string source, string operationId)
+    {
+        var parent = Path.GetDirectoryName(source)
+            ?? throw new InvalidDataException("A deletion target has no parent directory.");
+        return Path.Combine(parent, $".{Path.GetFileName(source)}.zoomrecorder-delete-{operationId}");
+    }
+
+    internal sealed record StagedEntry(string Original, string Quarantine, bool IsDirectory);
+
+    private sealed class StagedRecordingDeletion(
+        IRecordingDeletionFileOperations operations,
+        IReadOnlyList<StagedEntry> entries) : IStagedRecordingDeletion
+    {
+        public void Rollback() => Rollback(operations, entries);
+
+        public void Purge()
+        {
+            foreach (var entry in entries.Reverse())
+            {
+                try
+                {
+                    if (entry.IsDirectory && operations.DirectoryExists(entry.Quarantine))
+                    {
+                        operations.DeleteDirectory(entry.Quarantine);
+                    }
+                    else if (!entry.IsDirectory && operations.FileExists(entry.Quarantine))
+                    {
+                        operations.DeleteFile(entry.Quarantine);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        internal static void Rollback(
+            IRecordingDeletionFileOperations operations,
+            IReadOnlyList<StagedEntry> entries)
+        {
+            foreach (var entry in entries.Reverse())
+            {
+                if (entry.IsDirectory)
+                {
+                    operations.MoveDirectory(entry.Quarantine, entry.Original);
+                }
+                else
+                {
+                    operations.MoveFile(entry.Quarantine, entry.Original);
+                }
+            }
+        }
+    }
+
+    private sealed class SystemRecordingDeletionFileOperations : IRecordingDeletionFileOperations
+    {
+        public bool FileExists(string path) => File.Exists(path);
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+        public void MoveFile(string source, string destination) => File.Move(source, destination);
+        public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
+        public void DeleteFile(string path) => File.Delete(path);
+        public void DeleteDirectory(string path) => Directory.Delete(path, recursive: true);
     }
 }

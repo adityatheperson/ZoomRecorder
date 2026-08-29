@@ -12,6 +12,7 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
 
     private readonly ILibraryRepository _repository;
     private readonly Func<Guid, CancellationToken, Task<string>> processingStatus;
+    private readonly HashSet<Guid> _deletingRecordingIds = [];
     private RecordingListItem? _assignmentRetryItem;
     private string? _assignmentErrorMessage;
     private string? _deletionErrorMessage;
@@ -87,13 +88,17 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(deletion);
         cancellationToken.ThrowIfCancellationRequested();
+        if (!_deletingRecordingIds.Add(item.Recording.Id))
+        {
+            return false;
+        }
 
         try
         {
             await deletion(item.Recording, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             Recordings.Remove(item);
-            if (_assignmentRetryItem == item)
+            if (_assignmentRetryItem?.Recording.Id == item.Recording.Id)
             {
                 ClearAssignmentFailure();
             }
@@ -108,6 +113,10 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         {
             SetDeletionError(DeletionUnavailableMessage);
             return false;
+        }
+        finally
+        {
+            _deletingRecordingIds.Remove(item.Recording.Id);
         }
     }
 

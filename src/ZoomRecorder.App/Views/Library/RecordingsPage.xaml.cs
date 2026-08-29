@@ -87,27 +87,36 @@ public sealed partial class RecordingsPage : Page
     private async void DeleteClicked(object sender, RoutedEventArgs args)
     {
         if (_viewModel is null || _deletion is null ||
-            ((FrameworkElement)sender).DataContext is not RecordingListItem item)
+            sender is not Button deleteButton || !deleteButton.IsEnabled ||
+            deleteButton.DataContext is not RecordingListItem item)
         {
             return;
         }
 
-        var dialog = new ContentDialog
+        deleteButton.IsEnabled = false;
+        try
         {
-            Title = "Delete recording?",
-            Content = $"Permanently delete {item.FileName} and all associated study materials? This cannot be undone.",
-            PrimaryButtonText = "Delete",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
+            var dialog = new ContentDialog
+            {
+                Title = "Delete recording?",
+                Content = $"Permanently delete {item.FileName} and all associated study materials? This cannot be undone.",
+                PrimaryButtonText = "Delete",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = XamlRoot
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
 
-        await _viewModel.DeleteAsync(item, _deletion, CancellationToken.None);
-        UpdateListState();
+            await _viewModel.DeleteAsync(item, _deletion, CancellationToken.None);
+            UpdateListState();
+        }
+        finally
+        {
+            deleteButton.IsEnabled = true;
+        }
     }
 
     private void UpdateListState()

@@ -170,6 +170,46 @@ public sealed class RecordingDeletionServiceTests
         Assert.Single(await repository.ListRecordingsAsync(null, default));
     }
 
+    [Theory]
+    [InlineData("audio_chunks")]
+    [InlineData("transcription_chunks")]
+    [InlineData("processing_transcripts")]
+    [InlineData("lecture_packages")]
+    public async Task Delete_rejects_an_artifact_path_owned_by_another_recording_or_job(string table)
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var classRecord = await repository.CreateClassAsync("Ownership", null, default);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000009");
+        var jobId = Guid.Parse("82000000-0000-0000-0000-000000000009");
+        var videoPath = temp.CreateFile("recordings", "artifact-ownership.mp4");
+        var recording = await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, classRecord.Id, videoPath, "artifact-ownership.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var recordingArtifact = temp.CreateFile("artifacts", recordingId.ToString("D"), "summary.json");
+        var jobDirectory = temp.CreateDirectory("jobs", jobId.ToString("D"));
+        var audioArtifact = temp.CreateFile("jobs", jobId.ToString("D"), "audio.m4a");
+        var transcriptArtifact = temp.CreateFile("jobs", jobId.ToString("D"), "transcript.json");
+        var classGuideArtifact = temp.CreateFile("artifacts", classRecord.Id.ToString("D"), "guide.json");
+        await SeedProcessingDataAsync(
+            database.Connection, recording, classRecord.Id, jobId, jobDirectory,
+            audioArtifact, transcriptArtifact, recordingArtifact, classGuideArtifact, "Completed");
+        var wrongOwner = Guid.Parse("84000000-0000-0000-0000-000000000009");
+        var unrelatedArtifact = table == "lecture_packages"
+            ? temp.CreateFile("artifacts", wrongOwner.ToString("D"), "unrelated.json")
+            : temp.CreateFile("jobs", wrongOwner.ToString("D"), "unrelated.json");
+        await ReplaceArtifactPathAsync(database.Connection, table, unrelatedArtifact);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new RecordingDeletionService(database, paths).DeleteAsync(recordingId, default));
+
+        Assert.True(File.Exists(videoPath));
+        Assert.True(File.Exists(unrelatedArtifact));
+        Assert.Single(await repository.ListRecordingsAsync(null, default));
+    }
+
     [Fact]
     public async Task Delete_handles_a_terminal_job_migrated_from_schema_version_one()
     {
@@ -235,6 +275,32 @@ public sealed class RecordingDeletionServiceTests
 
         Assert.Empty(await repository.ListRecordingsAsync(null, default));
         Assert.Equal(0L, await CountRowsAsync(database.Connection, "processing_jobs"));
+    }
+
+    [Fact]
+    public async Task Delete_restores_earlier_files_when_a_later_staging_move_fails()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var classRecord = await repository.CreateClassAsync("Recovery", null, default);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000010");
+        var videoPath = temp.CreateFile("recordings", "recover.mp4");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, classRecord.Id, videoPath, "recover.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var guidePath = temp.CreateFile("artifacts", classRecord.Id.ToString("D"), "guide.json");
+        await SeedClassGuideAsync(database.Connection, classRecord.Id, guidePath);
+        var fileSystem = new PhysicalRecordingDeletionFileSystem(
+            new FailingMoveFileOperations(failOnMove: 2));
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            new RecordingDeletionService(database, paths, fileSystem).DeleteAsync(recordingId, default));
+
+        Assert.True(File.Exists(videoPath));
+        Assert.True(File.Exists(guidePath));
+        Assert.Single(await repository.ListRecordingsAsync(null, default));
     }
 
     private static async Task SeedProcessingDataAsync(
@@ -351,6 +417,40 @@ public sealed class RecordingDeletionServiceTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task ReplaceArtifactPathAsync(
+        SqliteConnection connection,
+        string table,
+        string path)
+    {
+        var commandText = table switch
+        {
+            "audio_chunks" => "UPDATE audio_chunks SET artifact_path = $path;",
+            "transcription_chunks" => "UPDATE transcription_chunks SET artifact_path = $path;",
+            "processing_transcripts" => "UPDATE processing_transcripts SET artifact_path = $path;",
+            "lecture_packages" => "UPDATE lecture_packages SET artifact_path = $path;",
+            _ => throw new ArgumentOutOfRangeException(nameof(table))
+        };
+        await using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        command.Parameters.AddWithValue("$path", path);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task SeedClassGuideAsync(SqliteConnection connection, Guid classId, string path)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO class_study_guides(
+                class_id, schema_version, artifact_path, artifact_sha256, is_update_pending, updated_at)
+            VALUES ($classId, 1, $path, $hash, 0, $now);
+            """;
+        command.Parameters.AddWithValue("$classId", classId.ToString("D"));
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$hash", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        command.Parameters.AddWithValue("$now", "2026-08-25T12:00:00.0000000+00:00");
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task<long> CountRowsAsync(SqliteConnection connection, string table)
     {
         await using var command = connection.CreateCommand();
@@ -396,11 +496,57 @@ public sealed class RecordingDeletionServiceTests
     private sealed class CallbackDeletionFileSystem(
         Func<CancellationToken, Task> callback) : IRecordingDeletionFileSystem
     {
-        public Task DeleteAsync(
+        public async Task<IStagedRecordingDeletion> StageAsync(
             string videoPath,
             string recordingArtifacts,
             IReadOnlyList<string> jobDirectories,
             string? classGuidePath,
-            CancellationToken cancellationToken) => callback(cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            await callback(cancellationToken);
+            return new NoopStagedRecordingDeletion();
+        }
+    }
+
+    private sealed class NoopStagedRecordingDeletion : IStagedRecordingDeletion
+    {
+        public void Rollback()
+        {
+        }
+
+        public void Purge()
+        {
+        }
+    }
+
+    private sealed class FailingMoveFileOperations(int failOnMove) : IRecordingDeletionFileOperations
+    {
+        private int moveCount;
+
+        public bool FileExists(string path) => File.Exists(path);
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+        public void MoveFile(string source, string destination)
+        {
+            ThrowIfSelectedMove();
+            File.Move(source, destination);
+        }
+
+        public void MoveDirectory(string source, string destination)
+        {
+            ThrowIfSelectedMove();
+            Directory.Move(source, destination);
+        }
+
+        public void DeleteFile(string path) => File.Delete(path);
+        public void DeleteDirectory(string path) => Directory.Delete(path, recursive: true);
+
+        private void ThrowIfSelectedMove()
+        {
+            moveCount++;
+            if (moveCount == failOnMove)
+            {
+                throw new IOException("Simulated late staging failure.");
+            }
+        }
     }
 }
