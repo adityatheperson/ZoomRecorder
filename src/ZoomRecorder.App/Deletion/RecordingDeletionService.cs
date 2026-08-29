@@ -3,76 +3,52 @@ using ZoomRecorder.App.Data;
 
 namespace ZoomRecorder.App.Deletion;
 
+internal interface IRecordingDeletionFileSystem
+{
+    Task DeleteAsync(
+        string videoPath,
+        string recordingArtifacts,
+        IReadOnlyList<string> jobDirectories,
+        string? classGuidePath,
+        CancellationToken cancellationToken);
+}
+
 public sealed class RecordingDeletionService
 {
     private readonly LibraryDatabase database;
     private readonly LibraryPaths paths;
+    private readonly IRecordingDeletionFileSystem fileSystem;
 
     public RecordingDeletionService(LibraryDatabase database, LibraryPaths paths)
+        : this(database, paths, new PhysicalRecordingDeletionFileSystem())
+    {
+    }
+
+    internal RecordingDeletionService(
+        LibraryDatabase database,
+        LibraryPaths paths,
+        IRecordingDeletionFileSystem fileSystem)
     {
         this.database = database ?? throw new ArgumentNullException(nameof(database));
         this.paths = paths ?? throw new ArgumentNullException(nameof(paths));
+        this.fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
     public async Task DeleteAsync(Guid recordingId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var plan = await LoadPlanAsync(recordingId, cancellationToken);
-        var targets = ValidateAndCollectTargets(plan);
-        Preflight(targets, cancellationToken);
-        DeleteFiles(targets, cancellationToken);
-        await DeleteDatabaseRowsAsync(plan, cancellationToken);
-    }
-
-    private async Task<DeletionPlan> LoadPlanAsync(Guid recordingId, CancellationToken cancellationToken)
-    {
         await database.Gate.WaitAsync(cancellationToken);
         try
         {
-            Guid? classId;
-            string videoPath;
-            await using (var recording = database.Connection.CreateCommand())
-            {
-                recording.CommandText = "SELECT class_id, file_path FROM recordings WHERE id = $recordingId;";
-                recording.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
-                await using var reader = await recording.ExecuteReaderAsync(cancellationToken);
-                if (!await reader.ReadAsync(cancellationToken))
-                {
-                    throw new KeyNotFoundException("The recording does not exist.");
-                }
-
-                classId = reader.IsDBNull(0) ? null : Guid.ParseExact(reader.GetString(0), "D");
-                videoPath = reader.GetString(1);
-            }
-
-            var jobDirectories = new List<string>();
-            await using (var jobs = database.Connection.CreateCommand())
-            {
-                jobs.CommandText = "SELECT job_directory, state FROM processing_jobs WHERE recording_id = $recordingId;";
-                jobs.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
-                await using var reader = await jobs.ExecuteReaderAsync(cancellationToken);
-                while (await reader.ReadAsync(cancellationToken))
-                {
-                    var state = reader.GetString(1);
-                    if (state is not ("Completed" or "Cancelled"))
-                    {
-                        throw new InvalidOperationException("The recording is still being processed.");
-                    }
-
-                    jobDirectories.Add(reader.GetString(0));
-                }
-            }
-
-            string? classGuidePath = null;
-            if (classId is { } assignedClassId)
-            {
-                await using var guide = database.Connection.CreateCommand();
-                guide.CommandText = "SELECT artifact_path FROM class_study_guides WHERE class_id = $classId;";
-                guide.Parameters.AddWithValue("$classId", GuidText(assignedClassId));
-                classGuidePath = await guide.ExecuteScalarAsync(cancellationToken) as string;
-            }
-
-            return new DeletionPlan(recordingId, classId, videoPath, jobDirectories, classGuidePath);
+            var plan = await LoadPlanAsync(recordingId, cancellationToken);
+            var targets = ValidateAndCollectTargets(plan);
+            await fileSystem.DeleteAsync(
+                targets.VideoPath,
+                targets.RecordingArtifacts,
+                targets.JobDirectories,
+                targets.ClassGuidePath,
+                cancellationToken);
+            await DeleteDatabaseRowsAsync(plan, cancellationToken);
         }
         finally
         {
@@ -80,14 +56,85 @@ public sealed class RecordingDeletionService
         }
     }
 
+    private async Task<DeletionPlan> LoadPlanAsync(Guid recordingId, CancellationToken cancellationToken)
+    {
+        Guid? classId;
+        string videoPath;
+        string fileName;
+        await using (var recording = database.Connection.CreateCommand())
+        {
+            recording.CommandText = "SELECT class_id, file_path, file_name FROM recordings WHERE id = $recordingId;";
+            recording.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            await using var reader = await recording.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new KeyNotFoundException("The recording does not exist.");
+            }
+
+            classId = reader.IsDBNull(0) ? null : Guid.ParseExact(reader.GetString(0), "D");
+            videoPath = reader.GetString(1);
+            fileName = reader.GetString(2);
+        }
+
+        var jobDirectories = new List<JobDirectory>();
+        await using (var jobs = database.Connection.CreateCommand())
+        {
+            jobs.CommandText = "SELECT id, job_directory, state FROM processing_jobs WHERE recording_id = $recordingId;";
+            jobs.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            await using var reader = await jobs.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var state = reader.GetString(2);
+                if (state is not ("Completed" or "Cancelled"))
+                {
+                    throw new InvalidOperationException("The recording is still being processed.");
+                }
+
+                jobDirectories.Add(new JobDirectory(
+                    Guid.ParseExact(reader.GetString(0), "D"),
+                    reader.IsDBNull(1) ? null : reader.GetString(1)));
+            }
+        }
+
+        string? classGuidePath = null;
+        if (classId is { } assignedClassId)
+        {
+            await using var guide = database.Connection.CreateCommand();
+            guide.CommandText = "SELECT artifact_path FROM class_study_guides WHERE class_id = $classId;";
+            guide.Parameters.AddWithValue("$classId", GuidText(assignedClassId));
+            classGuidePath = await guide.ExecuteScalarAsync(cancellationToken) as string;
+        }
+
+        return new DeletionPlan(recordingId, classId, videoPath, fileName, jobDirectories, classGuidePath);
+    }
+
     private DeletionTargets ValidateAndCollectTargets(DeletionPlan plan)
     {
-        var videoPath = ValidateFilePath(plan.VideoPath);
+        var videoPath = ValidateFileWithinDirectory(paths.RecordingsRoot, plan.VideoPath);
+        if (!string.Equals(Path.GetExtension(videoPath), ".mp4", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFileName(videoPath), plan.FileName, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("The recording file metadata is inconsistent.");
+        }
         var recordingArtifacts = ValidateChildDirectory(
             paths.ArtifactsRoot,
             Path.Combine(paths.ArtifactsRoot, GuidText(plan.RecordingId)));
         var jobDirectories = plan.JobDirectories
-            .Select(path => ValidateChildDirectory(paths.JobsRoot, path))
+            .Select(job =>
+            {
+                var expected = ValidateChildDirectory(
+                    paths.JobsRoot,
+                    Path.Combine(paths.JobsRoot, GuidText(job.JobId)));
+                var stored = job.Path is null
+                    ? expected
+                    : ValidateChildDirectory(paths.JobsRoot, job.Path);
+                if (!string.Equals(stored, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("A processing directory does not match its job owner.");
+                }
+
+                return expected;
+            })
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -135,16 +182,13 @@ public sealed class RecordingDeletionService
 
     private async Task DeleteDatabaseRowsAsync(DeletionPlan plan, CancellationToken cancellationToken)
     {
-        await database.Gate.WaitAsync(cancellationToken);
+        await using var transaction =
+            (SqliteTransaction)await database.Connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            await using var transaction =
-                (SqliteTransaction)await database.Connection.BeginTransactionAsync(cancellationToken);
-            try
-            {
-                await using var command = database.Connection.CreateCommand();
-                command.Transaction = transaction;
-                command.CommandText = """
+            await using var command = database.Connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
                     DELETE FROM transcription_chunks WHERE job_id IN (
                         SELECT id FROM processing_jobs WHERE recording_id = $recordingId);
                     DELETE FROM processing_transcripts WHERE job_id IN (
@@ -157,28 +201,23 @@ public sealed class RecordingDeletionService
                     DELETE FROM class_study_guides WHERE class_id = $classId;
                     DELETE FROM recordings WHERE id = $recordingId;
                     """;
-                command.Parameters.AddWithValue("$recordingId", GuidText(plan.RecordingId));
-                command.Parameters.AddWithValue("$classId", plan.ClassId is { } classId
-                    ? GuidText(classId)
-                    : DBNull.Value);
-                var affected = await command.ExecuteNonQueryAsync(cancellationToken);
-                if (affected == 0)
-                {
-                    throw new KeyNotFoundException("The recording does not exist.");
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                await transaction.CommitAsync(cancellationToken);
-            }
-            catch
+            command.Parameters.AddWithValue("$recordingId", GuidText(plan.RecordingId));
+            command.Parameters.AddWithValue("$classId", plan.ClassId is { } classId
+                ? GuidText(classId)
+                : DBNull.Value);
+            var affected = await command.ExecuteNonQueryAsync(cancellationToken);
+            if (affected == 0)
             {
-                await transaction.RollbackAsync(CancellationToken.None);
-                throw;
+                throw new KeyNotFoundException("The recording does not exist.");
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            await transaction.CommitAsync(cancellationToken);
         }
-        finally
+        catch
         {
-            database.Gate.Release();
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
         }
     }
 
@@ -221,18 +260,6 @@ public sealed class RecordingDeletionService
         }
     }
 
-    private static string ValidateFilePath(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var canonical = Path.GetFullPath(path);
-        if (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(canonical)) is null)
-        {
-            throw new InvalidDataException("A file-system root cannot be deleted.");
-        }
-
-        return canonical;
-    }
-
     private static string ValidateChildDirectory(string root, string path)
     {
         var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
@@ -265,12 +292,32 @@ public sealed class RecordingDeletionService
         Guid RecordingId,
         Guid? ClassId,
         string VideoPath,
-        IReadOnlyList<string> JobDirectories,
+        string FileName,
+        IReadOnlyList<JobDirectory> JobDirectories,
         string? ClassGuidePath);
+
+    private sealed record JobDirectory(Guid JobId, string? Path);
 
     private sealed record DeletionTargets(
         string VideoPath,
         string RecordingArtifacts,
         IReadOnlyList<string> JobDirectories,
         string? ClassGuidePath);
+
+    private sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFileSystem
+    {
+        public Task DeleteAsync(
+            string videoPath,
+            string recordingArtifacts,
+            IReadOnlyList<string> jobDirectories,
+            string? classGuidePath,
+            CancellationToken cancellationToken)
+        {
+            var targets = new DeletionTargets(
+                videoPath, recordingArtifacts, jobDirectories, classGuidePath);
+            Preflight(targets, cancellationToken);
+            DeleteFiles(targets, cancellationToken);
+            return Task.CompletedTask;
+        }
+    }
 }

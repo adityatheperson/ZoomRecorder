@@ -2,7 +2,11 @@ namespace ZoomRecorder.App.Data;
 
 public sealed class LibraryPaths
 {
-    public LibraryPaths(string databasePath, string artifactsRoot, string jobsRoot)
+    public LibraryPaths(
+        string databasePath,
+        string artifactsRoot,
+        string jobsRoot,
+        string? recordingsRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(artifactsRoot);
@@ -11,11 +15,13 @@ public sealed class LibraryPaths
         DatabasePath = Path.GetFullPath(databasePath);
         ArtifactsRoot = Path.GetFullPath(artifactsRoot);
         JobsRoot = Path.GetFullPath(jobsRoot);
+        RecordingsRoot = Path.GetFullPath(recordingsRoot ?? DefaultRecordingsRoot());
     }
 
     public string DatabasePath { get; }
     public string ArtifactsRoot { get; }
     public string JobsRoot { get; }
+    public string RecordingsRoot { get; }
 
     public static LibraryPaths CreateDefault()
     {
@@ -25,6 +31,11 @@ public sealed class LibraryPaths
         return new LibraryPaths(
             Path.Combine(localAppData, "ZoomRecorder", "library.db"),
             Path.Combine(userProfile, "Documents", "Zoom Recorder", "Classes"),
-            Path.Combine(localAppData, "ZoomRecorder", "jobs"));
+            Path.Combine(localAppData, "ZoomRecorder", "jobs"),
+            DefaultRecordingsRoot());
     }
+
+    internal static string DefaultRecordingsRoot() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+        "Meeting Recordings");
 }

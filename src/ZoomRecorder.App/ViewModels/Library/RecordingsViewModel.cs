@@ -93,6 +93,10 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
             await deletion(item.Recording, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             Recordings.Remove(item);
+            if (_assignmentRetryItem == item)
+            {
+                ClearAssignmentFailure();
+            }
             SetDeletionError(null);
             return true;
         }

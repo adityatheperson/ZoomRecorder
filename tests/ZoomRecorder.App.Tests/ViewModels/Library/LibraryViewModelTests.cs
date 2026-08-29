@@ -188,6 +188,26 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Deleting_an_assignment_retry_item_clears_the_stale_retry_action()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("retry-then-delete.mp4", null, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+        await viewModel.AssignAsync(
+            item,
+            (_, _) => Task.FromException<bool>(new IOException("assignment failed")),
+            CancellationToken.None);
+        Assert.True(viewModel.CanRetryAssignment);
+
+        await viewModel.DeleteAsync(item, (_, _) => Task.CompletedTask, CancellationToken.None);
+
+        Assert.False(viewModel.CanRetryAssignment);
+        Assert.Null(viewModel.AssignmentErrorMessage);
+    }
+
+    [Fact]
     public async Task Class_detail_loads_only_its_class_lectures()
     {
         var repository = SeedTwoClasses();
