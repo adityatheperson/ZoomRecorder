@@ -1,4 +1,5 @@
 using ZoomRecorder.App.Data;
+using ZoomRecorder.App.Deletion;
 using ZoomRecorder.App.LocalTranscription;
 using ZoomRecorder.App.Media;
 using ZoomRecorder.App.Security;
@@ -142,6 +143,7 @@ public sealed class AppServices : IAsyncDisposable
         var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, cancellationToken);
         try
         {
+            await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(cancellationToken);
             var repository = new SqliteLibraryRepository(database);
             var jobs = new SqliteProcessingJobStore(database);
             var artifacts = new ArtifactStore(paths.ArtifactsRoot);

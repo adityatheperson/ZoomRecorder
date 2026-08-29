@@ -6,6 +6,7 @@ namespace ZoomRecorder.App.Deletion;
 internal interface IRecordingDeletionFileSystem
 {
     Task<IStagedRecordingDeletion> StageAsync(
+        Guid recordingId,
         string videoPath,
         string recordingArtifacts,
         IReadOnlyList<string> jobDirectories,
@@ -59,6 +60,7 @@ public sealed class RecordingDeletionService
             var plan = await LoadPlanAsync(recordingId, cancellationToken);
             var targets = ValidateAndCollectTargets(plan);
             var staged = await fileSystem.StageAsync(
+                recordingId,
                 targets.VideoPath,
                 targets.RecordingArtifacts,
                 targets.JobDirectories,
@@ -343,6 +345,7 @@ internal sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFi
     }
 
     public Task<IStagedRecordingDeletion> StageAsync(
+        Guid recordingId,
         string videoPath,
         string recordingArtifacts,
         IReadOnlyList<string> jobDirectories,
@@ -350,22 +353,21 @@ internal sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFi
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var operationId = Guid.NewGuid().ToString("N");
         var entries = new List<StagedEntry>();
         try
         {
-            StageFile(videoPath, operationId, entries);
+            StageFile(videoPath, recordingId, entries);
             if (classGuidePath is not null)
             {
-                StageFile(classGuidePath, operationId, entries);
+                StageFile(classGuidePath, recordingId, entries);
             }
 
             foreach (var jobDirectory in jobDirectories)
             {
-                StageDirectory(jobDirectory, operationId, entries);
+                StageDirectory(jobDirectory, recordingId, entries);
             }
 
-            StageDirectory(recordingArtifacts, operationId, entries);
+            StageDirectory(recordingArtifacts, recordingId, entries);
             return Task.FromResult<IStagedRecordingDeletion>(
                 new StagedRecordingDeletion(operations, entries));
         }
@@ -384,35 +386,28 @@ internal sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFi
         }
     }
 
-    private void StageFile(string source, string operationId, ICollection<StagedEntry> entries)
+    private void StageFile(string source, Guid recordingId, ICollection<StagedEntry> entries)
     {
         if (!operations.FileExists(source))
         {
             return;
         }
 
-        var destination = QuarantinePath(source, operationId);
+        var destination = RecordingDeletionQuarantine.PathFor(source, recordingId);
         operations.MoveFile(source, destination);
         entries.Add(new StagedEntry(source, destination, IsDirectory: false));
     }
 
-    private void StageDirectory(string source, string operationId, ICollection<StagedEntry> entries)
+    private void StageDirectory(string source, Guid recordingId, ICollection<StagedEntry> entries)
     {
         if (!operations.DirectoryExists(source))
         {
             return;
         }
 
-        var destination = QuarantinePath(source, operationId);
+        var destination = RecordingDeletionQuarantine.PathFor(source, recordingId);
         operations.MoveDirectory(source, destination);
         entries.Add(new StagedEntry(source, destination, IsDirectory: true));
-    }
-
-    private static string QuarantinePath(string source, string operationId)
-    {
-        var parent = Path.GetDirectoryName(source)
-            ?? throw new InvalidDataException("A deletion target has no parent directory.");
-        return Path.Combine(parent, $".{Path.GetFileName(source)}.zoomrecorder-delete-{operationId}");
     }
 
     internal sealed record StagedEntry(string Original, string Quarantine, bool IsDirectory);
@@ -451,16 +446,29 @@ internal sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFi
             IRecordingDeletionFileOperations operations,
             IReadOnlyList<StagedEntry> entries)
         {
+            var failures = new List<Exception>();
             foreach (var entry in entries.Reverse())
             {
-                if (entry.IsDirectory)
+                try
                 {
-                    operations.MoveDirectory(entry.Quarantine, entry.Original);
+                    if (entry.IsDirectory)
+                    {
+                        operations.MoveDirectory(entry.Quarantine, entry.Original);
+                    }
+                    else
+                    {
+                        operations.MoveFile(entry.Quarantine, entry.Original);
+                    }
                 }
-                else
+                catch (Exception failure)
                 {
-                    operations.MoveFile(entry.Quarantine, entry.Original);
+                    failures.Add(failure);
                 }
+            }
+
+            if (failures.Count > 0)
+            {
+                throw new AggregateException("One or more staged recording files could not be restored.", failures);
             }
         }
     }

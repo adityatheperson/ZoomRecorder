@@ -293,7 +293,7 @@ public sealed class RecordingDeletionServiceTests
         var guidePath = temp.CreateFile("artifacts", classRecord.Id.ToString("D"), "guide.json");
         await SeedClassGuideAsync(database.Connection, classRecord.Id, guidePath);
         var fileSystem = new PhysicalRecordingDeletionFileSystem(
-            new FailingMoveFileOperations(failOnMove: 2));
+            new FailingMoveFileOperations(2));
 
         await Assert.ThrowsAsync<IOException>(() =>
             new RecordingDeletionService(database, paths, fileSystem).DeleteAsync(recordingId, default));
@@ -301,6 +301,118 @@ public sealed class RecordingDeletionServiceTests
         Assert.True(File.Exists(videoPath));
         Assert.True(File.Exists(guidePath));
         Assert.Single(await repository.ListRecordingsAsync(null, default));
+    }
+
+    [Fact]
+    public async Task Delete_attempts_to_restore_every_staged_target_when_one_rollback_move_fails()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var classRecord = await repository.CreateClassAsync("Rollback", null, default);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000011");
+        var videoPath = temp.CreateFile("recordings", "rollback.mp4");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, classRecord.Id, videoPath, "rollback.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var guidePath = temp.CreateFile("artifacts", classRecord.Id.ToString("D"), "guide.json");
+        await SeedClassGuideAsync(database.Connection, classRecord.Id, guidePath);
+        var recordingArtifact = temp.CreateFile("artifacts", recordingId.ToString("D"), "summary.json");
+        var fileSystem = new PhysicalRecordingDeletionFileSystem(
+            new FailingMoveFileOperations(3, 4));
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            new RecordingDeletionService(database, paths, fileSystem).DeleteAsync(recordingId, default));
+
+        Assert.True(File.Exists(videoPath));
+        Assert.True(File.Exists(recordingArtifact));
+        Assert.Single(await repository.ListRecordingsAsync(null, default));
+    }
+
+    [Fact]
+    public async Task Startup_recovery_restores_quarantined_files_when_recording_metadata_remains()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000012");
+        var videoPath = temp.CreateFile("recordings", "precommit-crash.mp4");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, null, videoPath, "precommit-crash.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var quarantinePath = RecordingDeletionQuarantine.PathFor(videoPath, recordingId);
+        File.Move(videoPath, quarantinePath);
+
+        await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
+
+        Assert.True(File.Exists(videoPath));
+        Assert.False(File.Exists(quarantinePath));
+    }
+
+    [Fact]
+    public async Task Startup_recovery_purges_quarantined_files_when_recording_metadata_was_committed_away()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000013");
+        var originalPath = System.IO.Path.Combine(paths.RecordingsRoot, "postcommit-crash.mp4");
+        var quarantinePath = RecordingDeletionQuarantine.PathFor(originalPath, recordingId);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(quarantinePath)!);
+        File.WriteAllText(quarantinePath, "pending purge");
+
+        await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
+
+        Assert.False(File.Exists(originalPath));
+        Assert.False(File.Exists(quarantinePath));
+    }
+
+    [Fact]
+    public async Task Startup_recovery_retries_a_purge_that_failed_after_metadata_commit()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000014");
+        var videoPath = temp.CreateFile("recordings", "purge-retry.mp4");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, null, videoPath, "purge-retry.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var quarantinePath = RecordingDeletionQuarantine.PathFor(videoPath, recordingId);
+        var fileSystem = new PhysicalRecordingDeletionFileSystem(new FailingPurgeFileOperations());
+
+        await new RecordingDeletionService(database, paths, fileSystem).DeleteAsync(recordingId, default);
+
+        Assert.False(File.Exists(videoPath));
+        Assert.True(File.Exists(quarantinePath));
+        Assert.Empty(await repository.ListRecordingsAsync(null, default));
+
+        await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
+        Assert.False(File.Exists(quarantinePath));
+    }
+
+    [Fact]
+    public async Task Database_failure_after_staging_restores_the_original_files()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000015");
+        var videoPath = temp.CreateFile("recordings", "database-rollback.mp4");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, null, videoPath, "database-rollback.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var fileSystem = new RemoveMetadataAfterStagingFileSystem(database.Connection);
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            new RecordingDeletionService(database, paths, fileSystem).DeleteAsync(recordingId, default));
+
+        Assert.True(File.Exists(videoPath));
+        Assert.False(File.Exists(RecordingDeletionQuarantine.PathFor(videoPath, recordingId)));
     }
 
     private static async Task SeedProcessingDataAsync(
@@ -497,6 +609,7 @@ public sealed class RecordingDeletionServiceTests
         Func<CancellationToken, Task> callback) : IRecordingDeletionFileSystem
     {
         public async Task<IStagedRecordingDeletion> StageAsync(
+            Guid recordingId,
             string videoPath,
             string recordingArtifacts,
             IReadOnlyList<string> jobDirectories,
@@ -519,9 +632,10 @@ public sealed class RecordingDeletionServiceTests
         }
     }
 
-    private sealed class FailingMoveFileOperations(int failOnMove) : IRecordingDeletionFileOperations
+    private sealed class FailingMoveFileOperations(params int[] failOnMoves) : IRecordingDeletionFileOperations
     {
         private int moveCount;
+        private readonly HashSet<int> failures = [.. failOnMoves];
 
         public bool FileExists(string path) => File.Exists(path);
         public bool DirectoryExists(string path) => Directory.Exists(path);
@@ -543,10 +657,48 @@ public sealed class RecordingDeletionServiceTests
         private void ThrowIfSelectedMove()
         {
             moveCount++;
-            if (moveCount == failOnMove)
+            if (failures.Contains(moveCount))
             {
                 throw new IOException("Simulated late staging failure.");
             }
+        }
+    }
+
+    private sealed class FailingPurgeFileOperations : IRecordingDeletionFileOperations
+    {
+        public bool FileExists(string path) => File.Exists(path);
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+        public void MoveFile(string source, string destination) => File.Move(source, destination);
+        public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
+        public void DeleteFile(string path) => throw new IOException("Simulated purge failure.");
+        public void DeleteDirectory(string path) => throw new IOException("Simulated purge failure.");
+    }
+
+    private sealed class RemoveMetadataAfterStagingFileSystem(SqliteConnection connection)
+        : IRecordingDeletionFileSystem
+    {
+        private readonly PhysicalRecordingDeletionFileSystem physical = new();
+
+        public async Task<IStagedRecordingDeletion> StageAsync(
+            Guid recordingId,
+            string videoPath,
+            string recordingArtifacts,
+            IReadOnlyList<string> jobDirectories,
+            string? classGuidePath,
+            CancellationToken cancellationToken)
+        {
+            var staged = await physical.StageAsync(
+                recordingId,
+                videoPath,
+                recordingArtifacts,
+                jobDirectories,
+                classGuidePath,
+                cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM recordings WHERE id = $recordingId;";
+            command.Parameters.AddWithValue("$recordingId", recordingId.ToString("D"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            return staged;
         }
     }
 }

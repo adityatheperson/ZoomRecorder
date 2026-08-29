@@ -220,6 +220,29 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Completed_recording_deletion_removes_the_row_even_if_cancellation_arrives_during_commit()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("committed-delete.mp4", BiologyId, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+        using var cancellation = new CancellationTokenSource();
+
+        var deleted = await viewModel.DeleteAsync(
+            item,
+            (_, _) =>
+            {
+                cancellation.Cancel();
+                return Task.CompletedTask;
+            },
+            cancellation.Token);
+
+        Assert.True(deleted);
+        Assert.Empty(viewModel.Recordings);
+    }
+
+    [Fact]
     public async Task Deleting_an_assignment_retry_item_clears_the_stale_retry_action()
     {
         var repository = new TestLibraryRepository();
