@@ -98,7 +98,29 @@ public sealed class LibraryDatabase : IAsyncDisposable
         }
 
         await EnsureWindowsPathIndexAsync(connection, transaction, cancellationToken);
+        await EnsureRecordingDeletionJournalAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task EnsureRecordingDeletionJournalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            CREATE TABLE IF NOT EXISTS recording_deletion_journal(
+                recording_id TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                target_kind TEXT NOT NULL,
+                original_path TEXT NOT NULL COLLATE {WindowsPathCollation},
+                quarantine_path TEXT NOT NULL COLLATE {WindowsPathCollation},
+                is_directory INTEGER NOT NULL CHECK(is_directory IN (0, 1)),
+                PRIMARY KEY(recording_id, original_path),
+                UNIQUE(quarantine_path));
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task EnsureWindowsPathIndexAsync(

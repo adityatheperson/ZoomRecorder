@@ -59,13 +59,24 @@ public sealed class RecordingDeletionService
         {
             var plan = await LoadPlanAsync(recordingId, cancellationToken);
             var targets = ValidateAndCollectTargets(plan);
-            var staged = await fileSystem.StageAsync(
-                recordingId,
-                targets.VideoPath,
-                targets.RecordingArtifacts,
-                targets.JobDirectories,
-                targets.ClassGuidePath,
-                cancellationToken);
+            var journalEntries = BuildJournalEntries(plan, targets);
+            await WriteJournalAsync(journalEntries, cancellationToken);
+            IStagedRecordingDeletion staged;
+            try
+            {
+                staged = await fileSystem.StageAsync(
+                    recordingId,
+                    targets.VideoPath,
+                    targets.RecordingArtifacts,
+                    targets.JobDirectories.Select(item => item.Path).ToArray(),
+                    targets.ClassGuidePath,
+                    cancellationToken);
+            }
+            catch
+            {
+                await RemoveJournalIfResolvedAsync(recordingId, CancellationToken.None);
+                throw;
+            }
             try
             {
                 await DeleteDatabaseRowsAsync(plan, CancellationToken.None);
@@ -75,6 +86,7 @@ public sealed class RecordingDeletionService
                 try
                 {
                     staged.Rollback();
+                    await RemoveJournalIfResolvedAsync(recordingId, CancellationToken.None);
                 }
                 catch (Exception rollbackFailure)
                 {
@@ -85,6 +97,7 @@ public sealed class RecordingDeletionService
             }
 
             staged.Purge();
+            await RemoveJournalIfResolvedAsync(recordingId, CancellationToken.None);
         }
         finally
         {
@@ -204,9 +217,10 @@ public sealed class RecordingDeletionService
                     throw new InvalidDataException("A processing directory does not match its job owner.");
                 }
 
-                return expected;
+                return new OwnedDirectory(job.JobId, expected);
             })
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToArray();
 
         foreach (var artifact in plan.ArtifactPaths)
@@ -229,9 +243,119 @@ public sealed class RecordingDeletionService
                 paths.ArtifactsRoot,
                 Path.Combine(paths.ArtifactsRoot, GuidText(classId)));
             classGuidePath = ValidateFileWithinDirectory(classDirectory, plan.ClassGuidePath);
+            if (IsWithinDirectory(recordingArtifacts, classGuidePath))
+            {
+                classGuidePath = null;
+            }
         }
 
         return new DeletionTargets(videoPath, recordingArtifacts, jobDirectories, classGuidePath);
+    }
+
+    private static RecordingDeletionJournalEntry[] BuildJournalEntries(
+        DeletionPlan plan,
+        DeletionTargets targets)
+    {
+        var entries = new List<RecordingDeletionJournalEntry>
+        {
+            JournalEntry(plan.RecordingId, plan.RecordingId, RecordingDeletionTargetKind.Video,
+                targets.VideoPath, isDirectory: false),
+            JournalEntry(plan.RecordingId, plan.RecordingId, RecordingDeletionTargetKind.RecordingArtifacts,
+                targets.RecordingArtifacts, isDirectory: true)
+        };
+        entries.AddRange(targets.JobDirectories.Select(job =>
+            JournalEntry(plan.RecordingId, job.OwnerId, RecordingDeletionTargetKind.JobDirectory,
+                job.Path, isDirectory: true)));
+        if (targets.ClassGuidePath is not null && plan.ClassId is { } classId)
+        {
+            entries.Add(JournalEntry(
+                plan.RecordingId,
+                classId,
+                RecordingDeletionTargetKind.ClassGuide,
+                targets.ClassGuidePath,
+                isDirectory: false));
+        }
+
+        return entries.ToArray();
+    }
+
+    private static RecordingDeletionJournalEntry JournalEntry(
+        Guid recordingId,
+        Guid ownerId,
+        RecordingDeletionTargetKind kind,
+        string originalPath,
+        bool isDirectory) => new(
+            recordingId,
+            ownerId,
+            kind,
+            originalPath,
+            RecordingDeletionQuarantine.PathFor(originalPath, recordingId),
+            isDirectory);
+
+    private async Task WriteJournalAsync(
+        IReadOnlyList<RecordingDeletionJournalEntry> entries,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction =
+            (SqliteTransaction)await database.Connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            foreach (var entry in entries)
+            {
+                await using var command = database.Connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = """
+                    INSERT INTO recording_deletion_journal(
+                        recording_id, owner_id, target_kind, original_path, quarantine_path, is_directory)
+                    VALUES ($recordingId, $ownerId, $kind, $originalPath, $quarantinePath, $isDirectory);
+                    """;
+                command.Parameters.AddWithValue("$recordingId", GuidText(entry.RecordingId));
+                command.Parameters.AddWithValue("$ownerId", GuidText(entry.OwnerId));
+                command.Parameters.AddWithValue("$kind", entry.Kind.ToString());
+                command.Parameters.AddWithValue("$originalPath", entry.OriginalPath);
+                command.Parameters.AddWithValue("$quarantinePath", entry.QuarantinePath);
+                command.Parameters.AddWithValue("$isDirectory", entry.IsDirectory ? 1 : 0);
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
+    private async Task RemoveJournalIfResolvedAsync(Guid recordingId, CancellationToken cancellationToken)
+    {
+        await using (var read = database.Connection.CreateCommand())
+        {
+            read.CommandText = """
+                SELECT quarantine_path, is_directory
+                FROM recording_deletion_journal
+                WHERE recording_id = $recordingId;
+                """;
+            read.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var quarantinePath = reader.GetString(0);
+                var exists = reader.GetInt64(1) == 1
+                    ? Directory.Exists(quarantinePath)
+                    : File.Exists(quarantinePath);
+                if (exists)
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var delete = database.Connection.CreateCommand();
+        delete.CommandText =
+            "DELETE FROM recording_deletion_journal WHERE recording_id = $recordingId;";
+        delete.Parameters.AddWithValue("$recordingId", GuidText(recordingId));
+        await delete.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private async Task DeleteDatabaseRowsAsync(DeletionPlan plan, CancellationToken cancellationToken)
@@ -286,6 +410,8 @@ public sealed class RecordingDeletionService
             throw new InvalidDataException("A deletion directory is outside the application data root.");
         }
 
+        EnsureNoReparsePoints(canonicalRoot, canonical);
+
         return canonical;
     }
 
@@ -298,7 +424,33 @@ public sealed class RecordingDeletionService
             throw new InvalidDataException("A deletion file is outside its application data directory.");
         }
 
+        EnsureNoReparsePoints(directory, canonical);
+
         return canonical;
+    }
+
+    private static bool IsWithinDirectory(string directory, string path)
+    {
+        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) +
+            Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void EnsureNoReparsePoints(string root, string path)
+    {
+        var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var current = canonicalRoot;
+        foreach (var part in Path.GetRelativePath(canonicalRoot, Path.GetFullPath(path)).Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            if ((File.Exists(current) || Directory.Exists(current)) &&
+                File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+            {
+                throw new InvalidDataException("A deletion path crosses a reparse point.");
+            }
+        }
     }
 
     private static string GuidText(Guid value) => value.ToString("D");
@@ -325,8 +477,10 @@ public sealed class RecordingDeletionService
     private sealed record DeletionTargets(
         string VideoPath,
         string RecordingArtifacts,
-        IReadOnlyList<string> JobDirectories,
+        IReadOnlyList<OwnedDirectory> JobDirectories,
         string? ClassGuidePath);
+
+    private sealed record OwnedDirectory(Guid OwnerId, string Path);
 
 }
 
@@ -480,6 +634,6 @@ internal sealed class PhysicalRecordingDeletionFileSystem : IRecordingDeletionFi
         public void MoveFile(string source, string destination) => File.Move(source, destination);
         public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
         public void DeleteFile(string path) => File.Delete(path);
-        public void DeleteDirectory(string path) => Directory.Delete(path, recursive: true);
+        public void DeleteDirectory(string path) => RecordingDeletionFileSafety.DeleteDirectoryTree(path);
     }
 }

@@ -301,6 +301,7 @@ public sealed class RecordingDeletionServiceTests
         Assert.True(File.Exists(videoPath));
         Assert.True(File.Exists(guidePath));
         Assert.Single(await repository.ListRecordingsAsync(null, default));
+        Assert.Equal(0L, await CountRowsAsync(database.Connection, "recording_deletion_journal"));
     }
 
     [Fact]
@@ -328,6 +329,7 @@ public sealed class RecordingDeletionServiceTests
         Assert.True(File.Exists(videoPath));
         Assert.True(File.Exists(recordingArtifact));
         Assert.Single(await repository.ListRecordingsAsync(null, default));
+        Assert.True(await CountRowsAsync(database.Connection, "recording_deletion_journal") > 0);
     }
 
     [Fact]
@@ -344,11 +346,15 @@ public sealed class RecordingDeletionServiceTests
             DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
         var quarantinePath = RecordingDeletionQuarantine.PathFor(videoPath, recordingId);
         File.Move(videoPath, quarantinePath);
+        await SeedDeletionJournalAsync(
+            database.Connection, recordingId, recordingId, RecordingDeletionTargetKind.Video,
+            videoPath, quarantinePath, isDirectory: false);
 
         await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
 
         Assert.True(File.Exists(videoPath));
         Assert.False(File.Exists(quarantinePath));
+        Assert.Equal(0L, await CountRowsAsync(database.Connection, "recording_deletion_journal"));
     }
 
     [Fact]
@@ -362,11 +368,61 @@ public sealed class RecordingDeletionServiceTests
         var quarantinePath = RecordingDeletionQuarantine.PathFor(originalPath, recordingId);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(quarantinePath)!);
         File.WriteAllText(quarantinePath, "pending purge");
+        await SeedDeletionJournalAsync(
+            database.Connection, recordingId, recordingId, RecordingDeletionTargetKind.Video,
+            originalPath, quarantinePath, isDirectory: false);
 
         await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
 
         Assert.False(File.Exists(originalPath));
         Assert.False(File.Exists(quarantinePath));
+        Assert.Equal(0L, await CountRowsAsync(database.Connection, "recording_deletion_journal"));
+    }
+
+    [Fact]
+    public async Task Startup_recovery_ignores_marker_shaped_files_without_a_registered_intent()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000016");
+        var videoPath = temp.CreateFile("recordings", "real.mp4");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, null, videoPath, "real.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+        var markerShapedFile = temp.CreateFile(
+            "recordings",
+            $"student-notes{RecordingDeletionQuarantine.Marker}{recordingId:D}");
+        var inferredOriginal = markerShapedFile[..markerShapedFile.LastIndexOf(
+            RecordingDeletionQuarantine.Marker, StringComparison.Ordinal)];
+
+        await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
+
+        Assert.True(File.Exists(markerShapedFile));
+        Assert.False(File.Exists(inferredOriginal));
+    }
+
+    [Fact]
+    public async Task Startup_recovery_rejects_a_registered_path_outside_its_trusted_root()
+    {
+        using var temp = new TestDirectory();
+        var paths = temp.LibraryPaths;
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000017");
+        var outsideOriginal = System.IO.Path.Combine(temp.Path, "outside", "unrelated.mp4");
+        var outsideQuarantine = RecordingDeletionQuarantine.PathFor(outsideOriginal, recordingId);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outsideQuarantine)!);
+        File.WriteAllText(outsideQuarantine, "unrelated");
+        await SeedDeletionJournalAsync(
+            database.Connection, recordingId, recordingId, RecordingDeletionTargetKind.Video,
+            outsideOriginal, outsideQuarantine, isDirectory: false);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default));
+
+        Assert.True(File.Exists(outsideQuarantine));
+        Assert.Equal(1L, await CountRowsAsync(database.Connection, "recording_deletion_journal"));
     }
 
     [Fact]
@@ -392,6 +448,7 @@ public sealed class RecordingDeletionServiceTests
 
         await new RecordingDeletionRecoveryService(database, paths).RecoverAsync(default);
         Assert.False(File.Exists(quarantinePath));
+        Assert.Equal(0L, await CountRowsAsync(database.Connection, "recording_deletion_journal"));
     }
 
     [Fact]
@@ -560,6 +617,30 @@ public sealed class RecordingDeletionServiceTests
         command.Parameters.AddWithValue("$path", path);
         command.Parameters.AddWithValue("$hash", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         command.Parameters.AddWithValue("$now", "2026-08-25T12:00:00.0000000+00:00");
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task SeedDeletionJournalAsync(
+        SqliteConnection connection,
+        Guid recordingId,
+        Guid ownerId,
+        RecordingDeletionTargetKind kind,
+        string originalPath,
+        string quarantinePath,
+        bool isDirectory)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO recording_deletion_journal(
+                recording_id, owner_id, target_kind, original_path, quarantine_path, is_directory)
+            VALUES ($recordingId, $ownerId, $kind, $originalPath, $quarantinePath, $isDirectory);
+            """;
+        command.Parameters.AddWithValue("$recordingId", recordingId.ToString("D"));
+        command.Parameters.AddWithValue("$ownerId", ownerId.ToString("D"));
+        command.Parameters.AddWithValue("$kind", kind.ToString());
+        command.Parameters.AddWithValue("$originalPath", originalPath);
+        command.Parameters.AddWithValue("$quarantinePath", quarantinePath);
+        command.Parameters.AddWithValue("$isDirectory", isDirectory ? 1 : 0);
         await command.ExecuteNonQueryAsync();
     }
 
