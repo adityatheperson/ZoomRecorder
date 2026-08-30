@@ -439,6 +439,12 @@ public sealed class RecordingDeletionService
     private static void EnsureNoReparsePoints(string root, string path)
     {
         var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        if ((File.Exists(canonicalRoot) || Directory.Exists(canonicalRoot)) &&
+            File.GetAttributes(canonicalRoot).HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new InvalidDataException("A deletion root is a reparse point.");
+        }
+
         var current = canonicalRoot;
         foreach (var part in Path.GetRelativePath(canonicalRoot, Path.GetFullPath(path)).Split(
                      [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],

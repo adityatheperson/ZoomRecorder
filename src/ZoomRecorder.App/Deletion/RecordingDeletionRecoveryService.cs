@@ -38,6 +38,12 @@ internal static class RecordingDeletionFileSafety
 {
     internal static void DeleteDirectoryTree(string path)
     {
+        if (File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
+        {
+            Directory.Delete(path, recursive: false);
+            return;
+        }
+
         foreach (var entry in Directory.EnumerateFileSystemEntries(path))
         {
             var attributes = File.GetAttributes(entry);
@@ -241,6 +247,12 @@ internal sealed class RecordingDeletionRecoveryService
     {
         var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         var canonicalPath = Path.GetFullPath(path);
+        if ((File.Exists(canonicalRoot) || Directory.Exists(canonicalRoot)) &&
+            File.GetAttributes(canonicalRoot).HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new InvalidDataException("A recording deletion root is a reparse point.");
+        }
+
         var relative = Path.GetRelativePath(canonicalRoot, canonicalPath);
         var current = canonicalRoot;
         foreach (var part in relative.Split(

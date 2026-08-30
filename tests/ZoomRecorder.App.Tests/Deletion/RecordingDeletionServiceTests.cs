@@ -426,6 +426,64 @@ public sealed class RecordingDeletionServiceTests
     }
 
     [Fact]
+    public void Purge_deletes_a_reparse_root_without_following_its_target()
+    {
+        using var temp = new TestDirectory();
+        var targetDirectory = temp.CreateDirectory("outside-target");
+        var targetFile = temp.CreateFile("outside-target", "keep.txt");
+        var linkPath = System.IO.Path.Combine(temp.Path, "quarantine-link");
+        try
+        {
+            Directory.CreateSymbolicLink(linkPath, targetDirectory);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            return;
+        }
+
+        RecordingDeletionFileSafety.DeleteDirectoryTree(linkPath);
+
+        Assert.False(Directory.Exists(linkPath));
+        Assert.True(File.Exists(targetFile));
+    }
+
+    [Fact]
+    public async Task Delete_rejects_a_recordings_root_that_is_a_reparse_point()
+    {
+        using var temp = new TestDirectory();
+        var physicalRoot = temp.CreateDirectory("physical-recordings");
+        var linkedRoot = System.IO.Path.Combine(temp.Path, "linked-recordings");
+        try
+        {
+            Directory.CreateSymbolicLink(linkedRoot, physicalRoot);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            return;
+        }
+
+        var paths = new LibraryPaths(
+            temp.LibraryPaths.DatabasePath,
+            temp.LibraryPaths.ArtifactsRoot,
+            temp.LibraryPaths.JobsRoot,
+            linkedRoot);
+        await using var database = await LibraryDatabase.OpenAsync(paths.DatabasePath, default);
+        var repository = new SqliteLibraryRepository(database);
+        var recordingId = Guid.Parse("81000000-0000-0000-0000-000000000018");
+        var videoPath = System.IO.Path.Combine(linkedRoot, "linked.mp4");
+        File.WriteAllText(videoPath, "keep");
+        await repository.AddRecordingAsync(new RecordingRecord(
+            recordingId, null, videoPath, "linked.mp4", null,
+            DateTimeOffset.Parse("2026-08-25T12:00:00Z"), TimeSpan.FromMinutes(45), 100, true), default);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new RecordingDeletionService(database, paths).DeleteAsync(recordingId, default));
+
+        Assert.True(File.Exists(System.IO.Path.Combine(physicalRoot, "linked.mp4")));
+        Assert.Single(await repository.ListRecordingsAsync(null, default));
+    }
+
+    [Fact]
     public async Task Startup_recovery_retries_a_purge_that_failed_after_metadata_commit()
     {
         using var temp = new TestDirectory();
