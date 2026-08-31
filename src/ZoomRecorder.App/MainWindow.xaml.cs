@@ -238,7 +238,13 @@ public sealed partial class MainWindow : Window, IAppNavigator
         await viewModel.LoadAsync(CancellationToken.None);
         if (request == _navigationRequest)
         {
-            RootFrame.Content = new ClassDetailPage(viewModel, NavigateClasses, ShowJoin, OpenLecture);
+            RootFrame.Content = new ClassDetailPage(
+                viewModel,
+                NavigateClasses,
+                ShowJoin,
+                OpenLecture,
+                (recording, cancellationToken) =>
+                    _recordingDeletion.DeleteAsync(recording.Id, cancellationToken));
         }
     }
 

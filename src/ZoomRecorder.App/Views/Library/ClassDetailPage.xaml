@@ -41,25 +41,40 @@
         <TabView Grid.Row="1" x:Name="DetailsTabs" Margin="0,18,0,0" IsAddTabButtonVisible="False">
             <TabViewItem Header="Lectures">
                 <Grid>
-                    <StackPanel x:Name="NoLecturesPanel" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <TextBlock Text="No lectures in this class yet." Style="{ThemeResource SubtitleTextBlockStyle}" />
-                        <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Center" Click="RecordClassClicked" />
-                    </StackPanel>
-                    <ListView x:Name="LecturesList" ItemsSource="{Binding Lectures}" SelectionMode="None"
-                              IsItemClickEnabled="True" ItemClick="LectureClicked">
-                        <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="libraryVm:RecordingListItem">
-                                <Grid Padding="12,10" ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{x:Bind RecordedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="1" Text="{x:Bind DurationText}" VerticalAlignment="Center" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <InfoBar x:Name="DeletionErrorPanel" Grid.Row="0" Margin="0,0,0,8"
+                             Title="Deletion failed" Severity="Error" IsClosable="False"
+                             Message="{Binding DeletionErrorMessage}" />
+                    <Grid Grid.Row="1">
+                        <StackPanel x:Name="NoLecturesPanel" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <TextBlock Text="No lectures in this class yet." Style="{ThemeResource SubtitleTextBlockStyle}" />
+                            <Button Content="Record a class" Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Center" Click="RecordClassClicked" />
+                        </StackPanel>
+                        <ListView x:Name="LecturesList" ItemsSource="{Binding Lectures}" SelectionMode="None"
+                                  IsItemClickEnabled="True" ItemClick="LectureClicked">
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="libraryVm:RecordingListItem">
+                                    <Grid Padding="12,10" ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{x:Bind RecordedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{x:Bind DurationText}" VerticalAlignment="Center" />
+                                        <Button Grid.Column="2" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center"
+                                                Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
                 </Grid>
             </TabViewItem>
             <TabViewItem Header="Study guide">

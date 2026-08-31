@@ -5,8 +5,12 @@ namespace ZoomRecorder.App.ViewModels.Library;
 
 public sealed class ClassDetailViewModel : LibraryViewModelBase
 {
+    private const string DeletionUnavailableMessage =
+        "The recording could not be deleted. Close any app using its files and try again.";
+
     private readonly ILibraryRepository _repository;
     private readonly Guid _classId;
+    private readonly HashSet<Guid> _deletingRecordingIds = [];
     private ClassRecord? _classRecord;
 
     public ClassDetailViewModel(ILibraryRepository repository, Guid classId)
@@ -20,6 +24,49 @@ public sealed class ClassDetailViewModel : LibraryViewModelBase
     public string Term => string.IsNullOrWhiteSpace(_classRecord?.Term) ? "No term" : _classRecord.Term;
     public ObservableCollection<RecordingListItem> Lectures { get; } = [];
     public int LectureCount => Lectures.Count;
+    private string? _deletionErrorMessage;
+    public string? DeletionErrorMessage => _deletionErrorMessage;
+    public bool IsDeleting(Guid recordingId) => _deletingRecordingIds.Contains(recordingId);
+
+    public async Task<bool> DeleteAsync(
+        RecordingListItem item,
+        Func<RecordingRecord, CancellationToken, Task> deletion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(deletion);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Lectures.Any(lecture => lecture.Id == item.Id) || !_deletingRecordingIds.Add(item.Id))
+        {
+            return false;
+        }
+
+        try
+        {
+            await deletion(item.Recording, cancellationToken);
+            var visibleItem = Lectures.SingleOrDefault(lecture => lecture.Id == item.Id);
+            if (visibleItem is not null)
+            {
+                Lectures.Remove(visibleItem);
+            }
+            RaisePropertyChanged(nameof(LectureCount));
+            SetDeletionError(null);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            SetDeletionError(DeletionUnavailableMessage);
+            return false;
+        }
+        finally
+        {
+            _deletingRecordingIds.Remove(item.Id);
+        }
+    }
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
@@ -88,5 +135,16 @@ public sealed class ClassDetailViewModel : LibraryViewModelBase
             .ThenBy(item => item.Id)
             .Select(item => new RecordingListItem(item)));
         RaisePropertyChanged(nameof(LectureCount));
+    }
+
+    private void SetDeletionError(string? message)
+    {
+        if (_deletionErrorMessage == message)
+        {
+            return;
+        }
+
+        _deletionErrorMessage = message;
+        RaisePropertyChanged(nameof(DeletionErrorMessage));
     }
 }

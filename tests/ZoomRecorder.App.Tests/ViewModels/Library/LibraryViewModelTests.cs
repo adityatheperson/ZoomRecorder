@@ -283,6 +283,79 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Successful_class_lecture_deletion_removes_the_lecture_and_updates_the_count()
+    {
+        var repository = SeedTwoClasses();
+        var viewModel = new ClassDetailViewModel(repository, BiologyId);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = viewModel.Lectures.Single(lecture => lecture.FileName == "mitosis.mp4");
+
+        var deleted = await viewModel.DeleteAsync(
+            item,
+            (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.DoesNotContain(item, viewModel.Lectures);
+        Assert.Equal(1, viewModel.LectureCount);
+        Assert.Null(viewModel.DeletionErrorMessage);
+    }
+
+    [Fact]
+    public async Task Failed_class_lecture_deletion_keeps_the_lecture_and_shows_a_sanitized_error()
+    {
+        var repository = SeedTwoClasses();
+        var viewModel = new ClassDetailViewModel(repository, BiologyId);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = viewModel.Lectures.Single(lecture => lecture.FileName == "mitosis.mp4");
+
+        var deleted = await viewModel.DeleteAsync(
+            item,
+            (_, _) => Task.FromException(new IOException("C:\\secret\\mitosis.mp4")),
+            CancellationToken.None);
+
+        Assert.False(deleted);
+        Assert.Contains(item, viewModel.Lectures);
+        Assert.Equal(2, viewModel.LectureCount);
+        Assert.Equal("The recording could not be deleted. Close any app using its files and try again.",
+            viewModel.DeletionErrorMessage);
+        Assert.DoesNotContain("secret", viewModel.DeletionErrorMessage);
+    }
+
+    [Fact]
+    public async Task Class_lecture_deletion_stays_single_and_removes_a_refreshed_row_by_recording_id()
+    {
+        var repository = SeedTwoClasses();
+        var viewModel = new ClassDetailViewModel(repository, BiologyId);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var original = viewModel.Lectures.Single(lecture => lecture.FileName == "mitosis.mp4");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        async Task Delete(RecordingRecord _, CancellationToken cancellationToken)
+        {
+            calls++;
+            started.SetResult();
+            await release.Task.WaitAsync(cancellationToken);
+        }
+
+        var first = viewModel.DeleteAsync(original, Delete, CancellationToken.None);
+        await started.Task;
+        await viewModel.SearchAsync(string.Empty, CancellationToken.None);
+        var refreshed = viewModel.Lectures.Single(lecture => lecture.Id == original.Id);
+
+        Assert.True(viewModel.IsDeleting(refreshed.Id));
+        var duplicate = await viewModel.DeleteAsync(refreshed, Delete, CancellationToken.None);
+        Assert.False(duplicate);
+        Assert.Equal(1, calls);
+
+        release.SetResult();
+        Assert.True(await first);
+        Assert.DoesNotContain(viewModel.Lectures, lecture => lecture.Id == original.Id);
+        Assert.False(viewModel.IsDeleting(original.Id));
+    }
+
+    [Fact]
     public async Task Class_search_calls_scoped_query_and_cannot_expose_another_class()
     {
         var repository = SeedTwoClasses();
