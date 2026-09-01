@@ -27,6 +27,8 @@
                         <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FF202020" />
                         <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#FF202020" />
                         <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                        <SolidColorBrush x:Key="NavigationViewItemSeparatorForeground" Color="Transparent" />
+                        <Thickness x:Key="NavigationViewBorderThickness">0</Thickness>
                         <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
