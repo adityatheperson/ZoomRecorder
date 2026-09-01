@@ -84,7 +84,11 @@
             <TabViewItem Header="Class settings">
                 <StackPanel Padding="20" Spacing="8">
                     <TextBlock Text="Remembered meetings" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Forget a remembered meeting ID to change only future recording assignments; existing lectures stay in this class." TextWrapping="Wrap" />
+                    <TextBlock TextWrapping="Wrap">
+                        <Run Text="Forget a remembered meeting ID to change only future" />
+                        <LineBreak />
+                        <Run Text="recording assignments; existing lectures stay in this class." />
+                    </TextBlock>
                 </StackPanel>
             </TabViewItem>
         </TabView>
