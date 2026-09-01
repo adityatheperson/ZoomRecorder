@@ -369,7 +369,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void NavigateSettings()
     {
         BeginLibraryNavigation(LibraryDestination.Settings, navigationItem: null);
-        RootFrame.Content = new SettingsPage(new SettingsViewModel(_services.CredentialVault, _services.Settings));
+        RootFrame.Content = new SettingsPage(new SettingsViewModel(_services.Settings));
     }
 
     private void ShowJoin()
