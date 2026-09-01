@@ -12,6 +12,7 @@
         BackRequested="NavigationBackRequested">
         <NavigationView.Resources>
             <ResourceDictionary>
+                <Thickness x:Key="NavigationViewBorderThickness">0</Thickness>
                 <ResourceDictionary.ThemeDictionaries>
                     <ResourceDictionary x:Key="Light">
                         <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FFF3F3F3" />
