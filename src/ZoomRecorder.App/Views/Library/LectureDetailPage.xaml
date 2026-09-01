@@ -11,8 +11,6 @@
             <Button Grid.Column="2" Content="Transcribe locally" Style="{ThemeResource AccentButtonStyle}" Click="ProcessClicked" />
         </Grid>
         <TabView Grid.Row="1" Margin="0,18,0,0" IsAddTabButtonVisible="False">
-            <TabViewItem Header="Summary"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
-            <TabViewItem Header="Notes"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
             <TabViewItem Header="Transcript">
                 <Grid Padding="16">
                     <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
@@ -23,9 +21,6 @@
                     </StackPanel>
                 </Grid>
             </TabViewItem>
-            <TabViewItem Header="Key terms"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
-            <TabViewItem Header="Assignments"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
-            <TabViewItem Header="Review questions"><TextBlock Text="{Binding StudyMaterialsUnavailableText}" Padding="16" /></TabViewItem>
         </TabView>
     </Grid>
 </Page>
