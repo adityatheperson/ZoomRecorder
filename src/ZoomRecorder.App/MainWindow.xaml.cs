@@ -37,9 +37,10 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private readonly RecordingDeletionService _recordingDeletion;
     private readonly RecordingRenameService _recordingRename;
 
-    public MainWindow(AppServices services)
+    public MainWindow(AppServices services, bool nightModeEnabled = false)
     {
         InitializeComponent();
+        ApplyNightMode(nightModeEnabled);
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _recordingDeletion = new RecordingDeletionService(services.Database, services.Paths);
         _recordingRename = new RecordingRenameService(services.Database, services.Paths);
@@ -369,8 +370,11 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void NavigateSettings()
     {
         BeginLibraryNavigation(LibraryDestination.Settings, navigationItem: null);
-        RootFrame.Content = new SettingsPage(new SettingsViewModel(_services.Settings));
+        RootFrame.Content = new SettingsPage(new SettingsViewModel(_services.Settings), ApplyNightMode);
     }
+
+    private void ApplyNightMode(bool enabled) =>
+        NavigationRoot.RequestedTheme = enabled ? ElementTheme.Dark : ElementTheme.Light;
 
     private void ShowJoin()
     {

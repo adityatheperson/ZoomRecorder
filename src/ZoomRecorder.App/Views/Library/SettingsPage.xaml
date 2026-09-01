@@ -5,6 +5,17 @@
     <ScrollViewer>
         <StackPanel Padding="36" Width="680" HorizontalAlignment="Center" Spacing="16">
             <TextBlock Text="Settings" Style="{ThemeResource TitleTextBlockStyle}" />
+            <TextBlock Text="Appearance" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,12,0,0" />
+            <ToggleSwitch x:Name="NightModeToggle"
+                          Header="Night mode"
+                          OffContent="Day mode"
+                          OnContent="Night mode"
+                          IsOn="{Binding NightModeEnabled, Mode=TwoWay}"
+                          Toggled="NightModeToggled" />
+            <TextBlock Text="Use a darker color theme throughout Zoom Recorder. Day mode is used by default."
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" />
+            <TextBlock Text="Recording preferences" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,12,0,0" />
             <CheckBox Content="Default future jobs to delete video after verified processing"
                       IsChecked="{Binding DeleteVideoByDefault, Mode=TwoWay}" />
             <Button Content="Save preferences" HorizontalAlignment="Left" Click="SavePreferencesClicked" />

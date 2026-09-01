@@ -16,7 +16,8 @@ public partial class App : Application
         try
         {
             services = await AppServices.CreateAsync(LibraryPaths.CreateDefault(), CancellationToken.None);
-            _window = new MainWindow(services);
+            var nightModeEnabled = await services.Settings.GetNightModeAsync(CancellationToken.None);
+            _window = new MainWindow(services, nightModeEnabled);
             _window.Closed += async (_, _) =>
             {
                 if (services is not null)
