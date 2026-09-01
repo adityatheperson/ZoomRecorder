@@ -12,11 +12,16 @@
         BackRequested="NavigationBackRequested">
         <NavigationView.Resources>
             <ResourceDictionary>
-                <Thickness x:Key="NavigationViewBorderThickness">0</Thickness>
                 <ResourceDictionary.ThemeDictionaries>
                     <ResourceDictionary x:Key="Light">
                         <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FFF3F3F3" />
                         <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#FFF3F3F3" />
+                        <SolidColorBrush x:Key="NavigationViewContentBackground" Color="#FFF3F3F3" />
+                        <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                        <SolidColorBrush x:Key="NavigationViewItemSeparatorForeground" Color="Transparent" />
+                        <Thickness x:Key="NavigationViewBorderThickness">0</Thickness>
+                        <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
+                        <CornerRadius x:Key="NavigationViewContentGridCornerRadius">0</CornerRadius>
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
                         <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FF202020" />
