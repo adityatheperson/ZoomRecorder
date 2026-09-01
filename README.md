@@ -2,6 +2,8 @@
 
 Zoom Recorder records the installed Zoom Workplace meeting window and keeps recordings in a local class library.
 
+**Website:** [adityatheperson.github.io/ZoomRecorder](https://adityatheperson.github.io/ZoomRecorder/)
+
 ## Launch
 
 Run `Launch Zoom Recorder.cmd`. The launcher opens `outputs\ZoomRecorder-0.5.0\ZoomRecorder.App.exe`.
