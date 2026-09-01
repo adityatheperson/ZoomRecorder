@@ -19,6 +19,11 @@ internal sealed partial class NativeHostWindow : IDisposable
 
     [LibraryImport("user32", EntryPoint = "CreateWindowExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     private static partial nint CreateWindowEx(uint exStyle, string className, string? windowName, uint style, int x, int y, int width, int height, nint parent, nint menu, nint instance, nint parameter);
-    [LibraryImport("user32", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool MoveWindow(nint window, int x, int y, int width, int height, [MarshalAs(UnmanagedType.Bool)] bool repaint);
-    [LibraryImport("user32", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool DestroyWindow(nint window);
+    [LibraryImport("user32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool MoveWindow(nint window, int x, int y, int width, int height, [MarshalAs(UnmanagedType.Bool)] bool repaint);
+
+    [LibraryImport("user32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DestroyWindow(nint window);
 }

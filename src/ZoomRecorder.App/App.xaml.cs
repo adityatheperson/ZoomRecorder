@@ -44,14 +44,17 @@ public partial class App : Application
                 // The original startup failure remains the user-visible result.
             }
 
-            _window = new Window { Content = new Microsoft.UI.Xaml.Controls.TextBlock
+            _window = new Window
             {
-                Text = diagnosticPath is null
+                Content = new Microsoft.UI.Xaml.Controls.TextBlock
+                {
+                    Text = diagnosticPath is null
                     ? $"Zoom Recorder could not start: {exception.Message}"
                     : $"Zoom Recorder could not start: {exception.Message}\n\nDiagnostic: {diagnosticPath}",
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(32)
-            }};
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(32)
+                }
+            };
             _window.Activate();
         }
     }

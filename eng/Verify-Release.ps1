@@ -2,7 +2,14 @@ param([string]$ReleaseDirectory)
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) { throw 'Pass -ReleaseDirectory.' }
-$required = @('ZoomRecorder.App.exe', 'ZoomRecorder.App.dll', 'ZoomRecorder.App.pri', 'ZoomRecorder.Native.dll')
+$required = @(
+    'ZoomRecorder.App.exe',
+    'ZoomRecorder.App.dll',
+    'ZoomRecorder.App.pri',
+    'ZoomRecorder.Native.dll',
+    'coreclr.dll',
+    'hostfxr.dll'
+)
 $required += @(
     'Assets\Whisper\model-small.en.json',
     'tools\whisper\LICENSE-whisper.cpp',
@@ -52,5 +59,8 @@ if (Test-Path -LiteralPath (Join-Path $ReleaseDirectory 'tools\whisper\cpu\ggml-
     throw 'CPU worker package unexpectedly contains the Vulkan backend.'
 }
 if (Test-Path -LiteralPath (Join-Path $ReleaseDirectory 'work')) { throw 'Unrelated work directory was packaged.' }
+if (@($packagedFiles | Where-Object Extension -EQ '.pdb').Count) {
+    throw 'Release contains debugging symbol files.'
+}
 
 Write-Host 'Release verification passed.'

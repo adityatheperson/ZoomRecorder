@@ -1,4 +1,6 @@
 .worktrees/
+outputs/
+work/
 artifacts/
 bin/
 obj/
