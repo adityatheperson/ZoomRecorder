@@ -24,7 +24,6 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <Button Content="Record a class" Click="RecordClassClicked" />
-                    <Button Content="Open study guide" Style="{ThemeResource AccentButtonStyle}" Click="OpenStudyGuideClicked" />
                 </StackPanel>
             </Grid>
             <Grid ColumnSpacing="8">
@@ -81,18 +80,6 @@
                         </ListView>
                     </Grid>
                 </Grid>
-            </TabViewItem>
-            <TabViewItem Header="Study guide">
-                <StackPanel Padding="20" Spacing="8">
-                    <TextBlock Text="Class study guide" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="The guide combines completed lectures in recording order. A pending badge appears while it is rebuilding." TextWrapping="Wrap" />
-                </StackPanel>
-            </TabViewItem>
-            <TabViewItem Header="Assignments">
-                <StackPanel Padding="20" Spacing="8">
-                    <TextBlock Text="Assignments" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock Text="Confirmed edits are preserved when study materials are refreshed." TextWrapping="Wrap" />
-                </StackPanel>
             </TabViewItem>
             <TabViewItem Header="Class settings">
                 <StackPanel Padding="20" Spacing="8">

@@ -56,7 +56,6 @@ public sealed partial class ClassDetailPage : Page
 
     private void BackClicked(object sender, RoutedEventArgs args) => _back();
     private void RecordClassClicked(object sender, RoutedEventArgs args) => _recordClass();
-    private void OpenStudyGuideClicked(object sender, RoutedEventArgs args) => DetailsTabs.SelectedIndex = 1;
     private void LectureClicked(object sender, ItemClickEventArgs args)
     {
         if (args.ClickedItem is RecordingListItem lecture && !_viewModel.IsDeleting(lecture.Id))
