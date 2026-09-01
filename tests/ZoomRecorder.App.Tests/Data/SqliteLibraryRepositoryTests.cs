@@ -24,14 +24,15 @@ public sealed class SqliteLibraryRepositoryTests
                 (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'schema_info', 'classes', 'recordings', 'meeting_class_mappings',
                     'processing_jobs', 'audio_chunks', 'transcription_chunks', 'processing_transcripts', 'lecture_packages',
-                    'assignments', 'class_study_guides', 'app_settings', 'recording_deletion_journal')),
+                    'assignments', 'class_study_guides', 'app_settings', 'recording_deletion_journal',
+                    'recording_rename_journal')),
                 (SELECT foreign_keys FROM pragma_foreign_keys);
             """;
 
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(2L, reader.GetInt64(0));
-        Assert.Equal(13L, reader.GetInt64(1));
+        Assert.Equal(14L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
     }
 

@@ -5,6 +5,7 @@ using WinRT.Interop;
 using ZoomRecorder.App.Data;
 using ZoomRecorder.App.Composition;
 using ZoomRecorder.App.Deletion;
+using ZoomRecorder.App.Renaming;
 using ZoomRecorder.App.Interop;
 using ZoomRecorder.App.Services;
 using ZoomRecorder.App.ViewModels;
@@ -34,12 +35,14 @@ public sealed partial class MainWindow : Window, IAppNavigator
 
     private readonly AppServices _services;
     private readonly RecordingDeletionService _recordingDeletion;
+    private readonly RecordingRenameService _recordingRename;
 
     public MainWindow(AppServices services)
     {
         InitializeComponent();
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _recordingDeletion = new RecordingDeletionService(services.Database, services.Paths);
+        _recordingRename = new RecordingRenameService(services.Database, services.Paths);
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
@@ -214,7 +217,9 @@ public sealed partial class MainWindow : Window, IAppNavigator
                 ShowJoin,
                 RetryRecordingsAsync,
                 deletion: (recording, cancellationToken) =>
-                    _recordingDeletion.DeleteAsync(recording.Id, cancellationToken));
+                    _recordingDeletion.DeleteAsync(recording.Id, cancellationToken),
+                rename: (recording, name, cancellationToken) =>
+                    _recordingRename.RenameAsync(recording.Id, name, cancellationToken));
         }
     }
 
@@ -244,7 +249,9 @@ public sealed partial class MainWindow : Window, IAppNavigator
                 ShowJoin,
                 OpenLecture,
                 (recording, cancellationToken) =>
-                    _recordingDeletion.DeleteAsync(recording.Id, cancellationToken));
+                    _recordingDeletion.DeleteAsync(recording.Id, cancellationToken),
+                (recording, name, cancellationToken) =>
+                    _recordingRename.RenameAsync(recording.Id, name, cancellationToken));
         }
     }
 

@@ -45,9 +45,12 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <InfoBar x:Name="DeletionErrorPanel" Grid.Row="0" Margin="0,0,0,8"
-                             Title="Deletion failed" Severity="Error" IsClosable="False"
-                             Message="{Binding DeletionErrorMessage}" />
+                    <StackPanel Grid.Row="0" Spacing="8" Margin="0,0,0,8">
+                        <InfoBar x:Name="DeletionErrorPanel" Title="Deletion failed" Severity="Error" IsClosable="False"
+                                 Message="{Binding DeletionErrorMessage}" />
+                        <InfoBar x:Name="RenameErrorPanel" Title="Rename failed" Severity="Error" IsClosable="False"
+                                 Message="{Binding RenameErrorMessage}" />
+                    </StackPanel>
                     <Grid Grid.Row="1">
                         <StackPanel x:Name="NoLecturesPanel" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Center">
                             <TextBlock Text="No lectures in this class yet." Style="{ThemeResource SubtitleTextBlockStyle}" />
@@ -62,13 +65,15 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel>
                                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{x:Bind RecordedAtText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                         </StackPanel>
                                         <TextBlock Grid.Column="1" Text="{x:Bind DurationText}" VerticalAlignment="Center" />
-                                        <Button Grid.Column="2" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center"
+                                        <Button Grid.Column="2" Content="Rename" Click="RenameClicked" VerticalAlignment="Center" />
+                                        <Button Grid.Column="3" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center"
                                                 Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                                     </Grid>
                                 </DataTemplate>

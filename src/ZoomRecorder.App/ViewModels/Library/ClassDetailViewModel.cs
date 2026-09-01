@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using ZoomRecorder.App.Renaming;
 using ZoomRecorder.Core.Library;
 
 namespace ZoomRecorder.App.ViewModels.Library;
@@ -11,6 +12,7 @@ public sealed class ClassDetailViewModel : LibraryViewModelBase
     private readonly ILibraryRepository _repository;
     private readonly Guid _classId;
     private readonly HashSet<Guid> _deletingRecordingIds = [];
+    private readonly HashSet<Guid> _renamingRecordingIds = [];
     private ClassRecord? _classRecord;
 
     public ClassDetailViewModel(ILibraryRepository repository, Guid classId)
@@ -25,7 +27,9 @@ public sealed class ClassDetailViewModel : LibraryViewModelBase
     public ObservableCollection<RecordingListItem> Lectures { get; } = [];
     public int LectureCount => Lectures.Count;
     private string? _deletionErrorMessage;
+    private string? _renameErrorMessage;
     public string? DeletionErrorMessage => _deletionErrorMessage;
+    public string? RenameErrorMessage => _renameErrorMessage;
     public bool IsDeleting(Guid recordingId) => _deletingRecordingIds.Contains(recordingId);
 
     public async Task<bool> DeleteAsync(
@@ -65,6 +69,60 @@ public sealed class ClassDetailViewModel : LibraryViewModelBase
         finally
         {
             _deletingRecordingIds.Remove(item.Id);
+        }
+    }
+
+    public async Task<bool> RenameAsync(
+        RecordingListItem item,
+        string requestedName,
+        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> rename,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(requestedName);
+        ArgumentNullException.ThrowIfNull(rename);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Lectures.Any(lecture => lecture.Id == item.Id) || !_renamingRecordingIds.Add(item.Id))
+        {
+            return false;
+        }
+
+        try
+        {
+            var renamed = await rename(item.Recording, requestedName, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var visibleIndex = Lectures
+                .Select((lecture, index) => (lecture, index))
+                .Where(entry => entry.lecture.Id == item.Id)
+                .Select(entry => entry.index)
+                .DefaultIfEmpty(-1)
+                .Single();
+            if (visibleIndex >= 0)
+            {
+                Lectures[visibleIndex] = new RecordingListItem(
+                    renamed,
+                    Lectures[visibleIndex].ProcessingStatus);
+            }
+            SetRenameError(null);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (RecordingRenameException exception)
+        {
+            SetRenameError(RecordingRenameErrorMessages.For(exception.Code));
+            return false;
+        }
+        catch
+        {
+            SetRenameError(RecordingRenameErrorMessages.Unavailable);
+            return false;
+        }
+        finally
+        {
+            _renamingRecordingIds.Remove(item.Id);
         }
     }
 
@@ -146,5 +204,16 @@ public sealed class ClassDetailViewModel : LibraryViewModelBase
 
         _deletionErrorMessage = message;
         RaisePropertyChanged(nameof(DeletionErrorMessage));
+    }
+
+    private void SetRenameError(string? message)
+    {
+        if (_renameErrorMessage == message)
+        {
+            return;
+        }
+
+        _renameErrorMessage = message;
+        RaisePropertyChanged(nameof(RenameErrorMessage));
     }
 }

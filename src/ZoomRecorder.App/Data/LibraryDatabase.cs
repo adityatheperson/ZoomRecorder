@@ -99,7 +99,25 @@ public sealed class LibraryDatabase : IAsyncDisposable
 
         await EnsureWindowsPathIndexAsync(connection, transaction, cancellationToken);
         await EnsureRecordingDeletionJournalAsync(connection, transaction, cancellationToken);
+        await EnsureRecordingRenameJournalAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task EnsureRecordingRenameJournalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            CREATE TABLE IF NOT EXISTS recording_rename_journal(
+                recording_id TEXT PRIMARY KEY,
+                original_path TEXT NOT NULL COLLATE {WindowsPathCollation},
+                renamed_path TEXT NOT NULL UNIQUE COLLATE {WindowsPathCollation},
+                renamed_file_name TEXT NOT NULL);
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task EnsureRecordingDeletionJournalAsync(

@@ -12,13 +12,15 @@ public sealed partial class ClassDetailPage : Page
     private readonly Action _recordClass;
     private readonly Action<RecordingListItem> _openLecture;
     private readonly Func<RecordingRecord, CancellationToken, Task> _deletion;
+    private readonly Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> _rename;
 
     public ClassDetailPage(
         ClassDetailViewModel viewModel,
         Action back,
         Action recordClass,
         Action<RecordingListItem> openLecture,
-        Func<RecordingRecord, CancellationToken, Task> deletion)
+        Func<RecordingRecord, CancellationToken, Task> deletion,
+        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> rename)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
@@ -26,6 +28,7 @@ public sealed partial class ClassDetailPage : Page
         _recordClass = recordClass ?? throw new ArgumentNullException(nameof(recordClass));
         _openLecture = openLecture ?? throw new ArgumentNullException(nameof(openLecture));
         _deletion = deletion ?? throw new ArgumentNullException(nameof(deletion));
+        _rename = rename ?? throw new ArgumentNullException(nameof(rename));
         DataContext = viewModel;
         UpdateLectureState();
     }
@@ -42,6 +45,7 @@ public sealed partial class ClassDetailPage : Page
         LecturesList.Visibility = _viewModel.Lectures.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         ErrorPanel.Visibility = _viewModel.ErrorMessage is null ? Visibility.Collapsed : Visibility.Visible;
         DeletionErrorPanel.IsOpen = _viewModel.DeletionErrorMessage is not null;
+        RenameErrorPanel.IsOpen = _viewModel.RenameErrorMessage is not null;
     }
 
     private async void RetryClicked(object sender, RoutedEventArgs args)
@@ -92,6 +96,46 @@ public sealed partial class ClassDetailPage : Page
         finally
         {
             deleteButton.IsEnabled = true;
+        }
+    }
+
+    private async void RenameClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button renameButton || !renameButton.IsEnabled ||
+            renameButton.DataContext is not RecordingListItem item)
+        {
+            return;
+        }
+
+        renameButton.IsEnabled = false;
+        try
+        {
+            var nameBox = new TextBox
+            {
+                Text = Path.GetFileNameWithoutExtension(item.FileName),
+                Header = "File name",
+                PlaceholderText = "Recording name"
+            };
+            var dialog = new ContentDialog
+            {
+                Title = "Rename recording",
+                Content = nameBox,
+                PrimaryButtonText = "Rename",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = XamlRoot
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            await _viewModel.RenameAsync(item, nameBox.Text, _rename, CancellationToken.None);
+            UpdateLectureState();
+        }
+        finally
+        {
+            renameButton.IsEnabled = true;
         }
     }
 }

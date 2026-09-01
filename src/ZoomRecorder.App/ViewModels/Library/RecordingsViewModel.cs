@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using ZoomRecorder.App.Renaming;
 using ZoomRecorder.Core.Library;
 
 namespace ZoomRecorder.App.ViewModels.Library;
@@ -13,9 +14,11 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
     private readonly ILibraryRepository _repository;
     private readonly Func<Guid, CancellationToken, Task<string>> processingStatus;
     private readonly HashSet<Guid> _deletingRecordingIds = [];
+    private readonly HashSet<Guid> _renamingRecordingIds = [];
     private RecordingListItem? _assignmentRetryItem;
     private string? _assignmentErrorMessage;
     private string? _deletionErrorMessage;
+    private string? _renameErrorMessage;
 
     public RecordingsViewModel(
         ILibraryRepository repository,
@@ -29,6 +32,7 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
     public string? AssignmentErrorMessage => _assignmentErrorMessage;
     public bool CanRetryAssignment => _assignmentRetryItem is not null;
     public string? DeletionErrorMessage => _deletionErrorMessage;
+    public string? RenameErrorMessage => _renameErrorMessage;
 
     public Task LoadAsync(CancellationToken cancellationToken) =>
         LoadQueryAsync(query: null, cancellationToken);
@@ -119,6 +123,60 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
         }
     }
 
+    public async Task<bool> RenameAsync(
+        RecordingListItem item,
+        string requestedName,
+        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> rename,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(requestedName);
+        ArgumentNullException.ThrowIfNull(rename);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_renamingRecordingIds.Add(item.Id))
+        {
+            return false;
+        }
+
+        try
+        {
+            var renamed = await rename(item.Recording, requestedName, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var visibleIndex = Recordings
+                .Select((recording, index) => (recording, index))
+                .Where(entry => entry.recording.Id == item.Id)
+                .Select(entry => entry.index)
+                .DefaultIfEmpty(-1)
+                .Single();
+            if (visibleIndex >= 0)
+            {
+                Recordings[visibleIndex] = new RecordingListItem(
+                    renamed,
+                    Recordings[visibleIndex].ProcessingStatus);
+            }
+            SetRenameError(null);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (RecordingRenameException exception)
+        {
+            SetRenameError(RecordingRenameErrorMessages.For(exception.Code));
+            return false;
+        }
+        catch
+        {
+            SetRenameError(RecordingRenameErrorMessages.Unavailable);
+            return false;
+        }
+        finally
+        {
+            _renamingRecordingIds.Remove(item.Id);
+        }
+    }
+
     private async Task LoadQueryAsync(string? query, CancellationToken cancellationToken)
     {
         BeginOperation();
@@ -198,5 +256,16 @@ public sealed class RecordingsViewModel : LibraryViewModelBase
 
         _deletionErrorMessage = message;
         RaisePropertyChanged(nameof(DeletionErrorMessage));
+    }
+
+    private void SetRenameError(string? message)
+    {
+        if (_renameErrorMessage == message)
+        {
+            return;
+        }
+
+        _renameErrorMessage = message;
+        RaisePropertyChanged(nameof(RenameErrorMessage));
     }
 }

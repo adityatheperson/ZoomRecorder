@@ -1,4 +1,5 @@
 using ZoomRecorder.App.ViewModels.Library;
+using ZoomRecorder.App.Renaming;
 using ZoomRecorder.Core.Library;
 
 namespace ZoomRecorder.App.Tests.ViewModels.Library;
@@ -167,6 +168,33 @@ public sealed class LibraryViewModelTests
     }
 
     [Fact]
+    public async Task Successful_recording_rename_replaces_the_visible_row_and_preserves_processing_status()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("lecture.mp4", BiologyId, Now));
+        var viewModel = new RecordingsViewModel(repository, (_, _) => Task.FromResult("Transcript ready"));
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+
+        var renamed = await viewModel.RenameAsync(
+            item,
+            "Biology Week 1",
+            (recording, _, _) => Task.FromResult(recording with
+            {
+                FilePath = "C:\\Videos\\Biology Week 1.mp4",
+                FileName = "Biology Week 1.mp4"
+            }),
+            CancellationToken.None);
+
+        Assert.True(renamed);
+        var visible = Assert.Single(viewModel.Recordings);
+        Assert.Equal(item.Id, visible.Id);
+        Assert.Equal("Biology Week 1.mp4", visible.FileName);
+        Assert.Equal("Transcript ready", visible.ProcessingStatus);
+        Assert.Null(viewModel.RenameErrorMessage);
+    }
+
+    [Fact]
     public async Task Failed_recording_deletion_keeps_the_item_and_shows_a_sanitized_retry_message()
     {
         var repository = new TestLibraryRepository();
@@ -299,6 +327,54 @@ public sealed class LibraryViewModelTests
         Assert.DoesNotContain(item, viewModel.Lectures);
         Assert.Equal(1, viewModel.LectureCount);
         Assert.Null(viewModel.DeletionErrorMessage);
+    }
+
+    [Fact]
+    public async Task Successful_class_lecture_rename_replaces_the_visible_row()
+    {
+        var repository = SeedTwoClasses();
+        var viewModel = new ClassDetailViewModel(repository, BiologyId);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = viewModel.Lectures.Single(lecture => lecture.FileName == "mitosis.mp4");
+
+        var renamed = await viewModel.RenameAsync(
+            item,
+            "Mitosis Review",
+            (recording, _, _) => Task.FromResult(recording with
+            {
+                FilePath = "C:\\Videos\\Mitosis Review.mp4",
+                FileName = "Mitosis Review.mp4"
+            }),
+            CancellationToken.None);
+
+        Assert.True(renamed);
+        Assert.Contains(viewModel.Lectures, lecture =>
+            lecture.Id == item.Id && lecture.FileName == "Mitosis Review.mp4");
+        Assert.Equal(2, viewModel.LectureCount);
+        Assert.Null(viewModel.RenameErrorMessage);
+    }
+
+    [Fact]
+    public async Task Recording_rename_failure_keeps_the_old_row_and_shows_a_specific_safe_error()
+    {
+        var repository = new TestLibraryRepository();
+        repository.Recordings.Add(Recording("lecture.mp4", BiologyId, Now));
+        var viewModel = new RecordingsViewModel(repository);
+        await viewModel.LoadAsync(CancellationToken.None);
+        var item = Assert.Single(viewModel.Recordings);
+
+        var renamed = await viewModel.RenameAsync(
+            item,
+            "Taken",
+            (_, _, _) => Task.FromException<RecordingRecord>(new RecordingRenameException(
+                RecordingRenameErrorCode.NameInUse,
+                "C:\\secret\\Taken.mp4")),
+            CancellationToken.None);
+
+        Assert.False(renamed);
+        Assert.Same(item, Assert.Single(viewModel.Recordings));
+        Assert.Equal("A recording with that name already exists.", viewModel.RenameErrorMessage);
+        Assert.DoesNotContain("secret", viewModel.RenameErrorMessage);
     }
 
     [Fact]
