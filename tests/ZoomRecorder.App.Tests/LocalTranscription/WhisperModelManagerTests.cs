@@ -410,16 +410,17 @@ public sealed class WhisperModelManagerTests
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             if (!_served)
             {
                 _served = true;
                 buffer.Span[0] = payload[0];
-                return ValueTask.FromResult(1);
+                return 1;
             }
 
-            return ValueTask.FromCanceled<int>(cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
         }
     }
 
