@@ -10,6 +10,20 @@
         IsSettingsVisible="True"
         SelectionChanged="NavigationSelectionChanged"
         BackRequested="NavigationBackRequested">
+        <NavigationView.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Light">
+                        <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FFF3F3F3" />
+                        <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#FFF3F3F3" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FF202020" />
+                        <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#FF202020" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+            </ResourceDictionary>
+        </NavigationView.Resources>
         <NavigationView.MenuItems>
             <NavigationViewItem x:Name="HomeNavigationItem" Content="Home" Tag="home">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE80F;" /></NavigationViewItem.Icon>
