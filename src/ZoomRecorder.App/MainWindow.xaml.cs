@@ -46,7 +46,9 @@ public sealed partial class MainWindow : Window, IAppNavigator
         _recordingDeletion = new RecordingDeletionService(services.Database, services.Paths);
         _recordingRename = new RecordingRenameService(services.Database, services.Paths);
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
-        AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
+        var appWindow = AppWindow.GetFromWindowId(windowId);
+        appWindow.SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
+        ConfigureTitleBar(appWindow);
         _nativeSession = new NativeSession();
         _joinFlow = new ExternalZoomJoinFlow(_nativeSession, services.Paths.RecordingsRoot);
         _libraryInitialization = Task.FromResult<LibraryContext?>(CreateLibraryContext(services));
@@ -57,6 +59,28 @@ public sealed partial class MainWindow : Window, IAppNavigator
         });
         Closed += OnClosed;
         NavigateHome();
+    }
+
+    private static void ConfigureTitleBar(AppWindow appWindow)
+    {
+        if (!AppWindowTitleBar.IsCustomizationSupported())
+        {
+            return;
+        }
+
+        var titleBar = appWindow.TitleBar;
+        titleBar.BackgroundColor = Microsoft.UI.Colors.Black;
+        titleBar.ForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.InactiveBackgroundColor = Microsoft.UI.Colors.Black;
+        titleBar.InactiveForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Black;
+        titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonHoverBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(255, 38, 38, 38);
+        titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonPressedBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(255, 64, 64, 64);
+        titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+        titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Black;
+        titleBar.ButtonInactiveForegroundColor = Microsoft.UI.ColorHelper.FromArgb(255, 190, 190, 190);
     }
 
     public void ShowMeeting()
