@@ -26,11 +26,10 @@ public sealed class LibraryPaths
     public static LibraryPaths CreateDefault()
     {
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         return new LibraryPaths(
             Path.Combine(localAppData, "ZoomRecorder", "library.db"),
-            Path.Combine(userProfile, "Documents", "Zoom Recorder", "Classes"),
+            DefaultArtifactsRoot(),
             Path.Combine(localAppData, "ZoomRecorder", "jobs"),
             DefaultRecordingsRoot());
     }
@@ -38,4 +37,8 @@ public sealed class LibraryPaths
     internal static string DefaultRecordingsRoot() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
         "Meeting Recordings");
+
+    internal static string DefaultArtifactsRoot() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        "Documents", "Zoom Recorder", "Classes");
 }

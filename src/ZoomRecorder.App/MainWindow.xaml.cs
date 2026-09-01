@@ -17,6 +17,7 @@ using ZoomRecorder.Core.Meetings;
 using ZoomRecorder.Core.Ports;
 using ZoomRecorder.Core.Processing;
 using System.Text.Json;
+using Windows.Storage.Pickers;
 
 namespace ZoomRecorder.App;
 
@@ -47,7 +48,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
         var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this));
         AppWindow.GetFromWindowId(windowId).SetIcon(WindowIconPath.Resolve(AppContext.BaseDirectory));
         _nativeSession = new NativeSession();
-        _joinFlow = new ExternalZoomJoinFlow(_nativeSession);
+        _joinFlow = new ExternalZoomJoinFlow(_nativeSession, services.Paths.RecordingsRoot);
         _libraryInitialization = Task.FromResult<LibraryContext?>(CreateLibraryContext(services));
         _joinFlow.RecordingCompleted += (_, result) => _ = HandleRecordingCompletedAsync(result);
         _joinFlow.FinalizationFailed += (_, message) => DispatcherQueue.TryEnqueue(() =>
@@ -370,11 +371,23 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void NavigateSettings()
     {
         BeginLibraryNavigation(LibraryDestination.Settings, navigationItem: null);
-        RootFrame.Content = new SettingsPage(new SettingsViewModel(_services.Settings), ApplyNightMode);
+        RootFrame.Content = new SettingsPage(
+            new SettingsViewModel(_services.Settings, _services.StorageLocations),
+            ApplyNightMode,
+            PickFolderAsync);
     }
 
     private void ApplyNightMode(bool enabled) =>
         NavigationRoot.RequestedTheme = enabled ? ElementTheme.Dark : ElementTheme.Light;
+
+    private async Task<string?> PickFolderAsync()
+    {
+        var picker = new FolderPicker();
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        var folder = await picker.PickSingleFolderAsync();
+        return folder?.Path;
+    }
 
     private void ShowJoin()
     {
@@ -492,7 +505,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
             ? () => ShowCompletionAssignmentDialogAsync(viewModel, library.Repository, recording)
             : null;
 
-        RootFrame.Content = new CompletionPage(viewModel, ShowJoin, assign);
+        RootFrame.Content = new CompletionPage(viewModel, ShowJoin, assign, _services.Paths.RecordingsRoot);
     }
 
     private async Task ShowCompletionAssignmentDialogAsync(

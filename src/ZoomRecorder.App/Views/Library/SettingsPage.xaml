@@ -19,6 +19,22 @@
             <CheckBox Content="Default future jobs to delete video after verified processing"
                       IsChecked="{Binding DeleteVideoByDefault, Mode=TwoWay}" />
             <Button Content="Save preferences" HorizontalAlignment="Left" Click="SavePreferencesClicked" />
+            <TextBlock Text="Storage locations" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,12,0,0" />
+            <TextBlock Text="New files use these folders after Zoom Recorder is restarted. Existing files are not moved."
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+            <TextBlock Text="Recordings" FontWeight="SemiBold" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBox Text="{Binding RecordingsDirectory, Mode=TwoWay}" IsReadOnly="True" />
+                <Button Grid.Column="1" Content="Browse…" Click="BrowseRecordingsClicked" />
+            </Grid>
+            <TextBlock Text="Transcripts" FontWeight="SemiBold" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBox Text="{Binding TranscriptsDirectory, Mode=TwoWay}" IsReadOnly="True" />
+                <Button Grid.Column="1" Content="Browse…" Click="BrowseTranscriptsClicked" />
+            </Grid>
+            <Button Content="Save storage locations" HorizontalAlignment="Left" Click="SaveStorageLocationsClicked" />
             <InfoBar x:Name="PreferencesStatus" IsOpen="False" />
             <TextBlock Text="Privacy" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,12,0,0" />
             <TextBlock Text="{Binding PrivacyText}" TextWrapping="Wrap" />

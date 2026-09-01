@@ -26,9 +26,9 @@ internal sealed class ExternalZoomJoinFlow : IJoinFlow
     public event EventHandler<string>? FinalizationFailed;
     public string? CurrentMeetingId { get; private set; }
 
-    public ExternalZoomJoinFlow(NativeSession session)
+    public ExternalZoomJoinFlow(NativeSession session, string recordingDirectory)
         : this(
-            new LocalRecordingStore(),
+            new LocalRecordingStore(recordingDirectory),
             new WindowsMeetingLauncher(),
             new ZoomWindowDetector(new Win32ZoomWindowEnumerator()),
             new NativeRecordingSession(session))

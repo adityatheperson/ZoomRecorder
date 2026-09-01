@@ -15,7 +15,15 @@ public partial class App : Application
     {
         try
         {
-            services = await AppServices.CreateAsync(LibraryPaths.CreateDefault(), CancellationToken.None);
+            var defaultPaths = LibraryPaths.CreateDefault();
+            var storageLocations = StorageLocationSettingsStore.CreateDefault();
+            var locations = await storageLocations.LoadAsync(CancellationToken.None);
+            var configuredPaths = new LibraryPaths(
+                defaultPaths.DatabasePath,
+                locations.TranscriptsDirectory,
+                defaultPaths.JobsRoot,
+                locations.RecordingsDirectory);
+            services = await AppServices.CreateAsync(configuredPaths, storageLocations, CancellationToken.None);
             var nightModeEnabled = await services.Settings.GetNightModeAsync(CancellationToken.None);
             _window = new MainWindow(services, nightModeEnabled);
             _window.Closed += async (_, _) =>

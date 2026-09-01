@@ -23,6 +23,7 @@ public sealed class AppServices : IAsyncDisposable
         ProcessingCoordinator coordinator,
         ICredentialVault credentialVault,
         IAppSettingsStore settings,
+        IStorageLocationSettingsStore storageLocations,
         IProcessingArtifactStore artifacts,
         StudyMaterialMergeService studyMaterials,
         LibraryPaths paths,
@@ -35,6 +36,7 @@ public sealed class AppServices : IAsyncDisposable
         Coordinator = coordinator;
         CredentialVault = credentialVault;
         Settings = settings;
+        StorageLocations = storageLocations;
         Artifacts = artifacts;
         StudyMaterials = studyMaterials;
         Paths = paths;
@@ -48,6 +50,7 @@ public sealed class AppServices : IAsyncDisposable
     public ProcessingCoordinator Coordinator { get; }
     public ICredentialVault CredentialVault { get; }
     public IAppSettingsStore Settings { get; }
+    public IStorageLocationSettingsStore StorageLocations { get; }
     public IProcessingArtifactStore Artifacts { get; }
     public StudyMaterialMergeService StudyMaterials { get; }
     public LibraryPaths Paths { get; }
@@ -107,6 +110,12 @@ public sealed class AppServices : IAsyncDisposable
     public static async Task<AppServices> CreateAsync(
         LibraryPaths paths,
         CancellationToken cancellationToken)
+        => await CreateAsync(paths, StorageLocationSettingsStore.CreateDefault(), cancellationToken);
+
+    public static async Task<AppServices> CreateAsync(
+        LibraryPaths paths,
+        IStorageLocationSettingsStore storageLocations,
+        CancellationToken cancellationToken)
     {
         var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
         try
@@ -117,7 +126,8 @@ public sealed class AppServices : IAsyncDisposable
                 new WindowsCredentialVault(),
                 LoadDefaultManifest(),
                 LocalTranscriptionPaths.CreateDefault(),
-                cancellationToken);
+                cancellationToken,
+                storageLocations);
         }
         catch
         {
@@ -132,7 +142,8 @@ public sealed class AppServices : IAsyncDisposable
         ICredentialVault credentialVault,
         WhisperModelManifest manifest,
         LocalTranscriptionPaths localPaths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IStorageLocationSettingsStore? storageLocations = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(http);
@@ -172,6 +183,7 @@ public sealed class AppServices : IAsyncDisposable
                 coordinator,
                 credentialVault,
                 new SqliteAppSettingsStore(database),
+                storageLocations ?? StorageLocationSettingsStore.CreateDefault(),
                 artifacts,
                 new StudyMaterialMergeService(repository, disabledStudyGeneration, artifacts),
                 paths,

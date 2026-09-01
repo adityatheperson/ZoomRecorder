@@ -5,12 +5,12 @@ using ZoomRecorder.App.Data;
 
 namespace ZoomRecorder.App.Services;
 
-internal sealed class LocalRecordingStore : IRecordingStore
+internal sealed class LocalRecordingStore(string recordingDirectory) : IRecordingStore
 {
     public Task<RecordingTarget> PrepareAsync(MeetingJoinRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var directory = LibraryPaths.DefaultRecordingsRoot();
+        var directory = Path.GetFullPath(recordingDirectory);
         Directory.CreateDirectory(directory);
         var path = RecordingPathFactory.Create(directory, $"Zoom {request.MeetingId}", DateTimeOffset.Now, File.Exists);
         return Task.FromResult(new RecordingTarget(path));
