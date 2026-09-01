@@ -26,6 +26,8 @@
                     <ResourceDictionary x:Key="Dark">
                         <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#FF202020" />
                         <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#FF202020" />
+                        <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                        <Thickness x:Key="NavigationViewContentGridBorderThickness">0</Thickness>
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>
