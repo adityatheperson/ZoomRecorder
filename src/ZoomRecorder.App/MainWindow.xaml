@@ -21,7 +21,9 @@
         IsBackButtonVisible="Visible"
         IsSettingsVisible="True"
         SelectionChanged="NavigationSelectionChanged"
-        BackRequested="NavigationBackRequested">
+        BackRequested="NavigationBackRequested"
+        PaneOpened="NavigationPaneOpened"
+        PaneClosed="NavigationPaneClosed">
         <NavigationView.Resources>
             <ResourceDictionary>
                 <ResourceDictionary.ThemeDictionaries>
@@ -59,8 +61,10 @@
         </NavigationView.MenuItems>
         <NavigationView.PaneFooter>
             <Button
+                x:Name="RecordClassButton"
                 Content="Record a class"
                 Style="{ThemeResource AccentButtonStyle}"
+                MinWidth="0"
                 HorizontalAlignment="Stretch"
                 HorizontalContentAlignment="Center"
                 Click="RecordClassClicked" />

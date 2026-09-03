@@ -136,6 +136,22 @@ public sealed partial class MainWindow : Window, IAppNavigator
         }
     }
 
+    private void NavigationPaneOpened(NavigationView sender, object args)
+    {
+        RecordClassButton.Content = "Record a class";
+        ToolTipService.SetToolTip(RecordClassButton, null);
+    }
+
+    private void NavigationPaneClosed(NavigationView sender, object args)
+    {
+        RecordClassButton.Content = new FontIcon
+        {
+            Glyph = "\uE714",
+            FontSize = 16
+        };
+        ToolTipService.SetToolTip(RecordClassButton, "Record a class");
+    }
+
     private void RecordClassClicked(object sender, RoutedEventArgs args) => ShowJoin();
 
     private void NavigateHome()
