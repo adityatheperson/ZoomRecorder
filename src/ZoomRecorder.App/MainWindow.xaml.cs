@@ -136,7 +136,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
         }
     }
 
-    private void NavigationPaneOpened(NavigationView sender, object args)
+    private void NavigationPaneOpening(NavigationView sender, object args)
     {
         RecordClassButton.Content = "Record a class";
         ToolTipService.SetToolTip(RecordClassButton, null);

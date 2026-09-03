@@ -22,7 +22,7 @@
         IsSettingsVisible="True"
         SelectionChanged="NavigationSelectionChanged"
         BackRequested="NavigationBackRequested"
-        PaneOpened="NavigationPaneOpened"
+        PaneOpening="NavigationPaneOpening"
         PaneClosing="NavigationPaneClosing">
         <NavigationView.Resources>
             <ResourceDictionary>
