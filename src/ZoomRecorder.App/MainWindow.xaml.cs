@@ -44,6 +44,8 @@ public sealed partial class MainWindow : Window, IAppNavigator
     public MainWindow(AppServices services, bool nightModeEnabled = false)
     {
         InitializeComponent();
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
         ApplyNightMode(nightModeEnabled);
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _recordingDeletion = new RecordingDeletionService(services.Database, services.Paths);
