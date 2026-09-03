@@ -17,6 +17,7 @@
     <NavigationView
         Grid.Row="1"
         x:Name="NavigationRoot"
+        Loaded="NavigationRootLoaded"
         PaneDisplayMode="Left"
         IsBackButtonVisible="Visible"
         IsSettingsVisible="True"

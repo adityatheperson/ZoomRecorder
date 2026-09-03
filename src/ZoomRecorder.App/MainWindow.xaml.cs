@@ -136,10 +136,14 @@ public sealed partial class MainWindow : Window, IAppNavigator
         }
     }
 
+    private void NavigationRootLoaded(object sender, RoutedEventArgs args) =>
+        UpdateSettingsItemAlignment(NavigationRoot.IsPaneOpen);
+
     private void NavigationPaneOpening(NavigationView sender, object args)
     {
         RecordClassButton.Content = "Record a class";
         ToolTipService.SetToolTip(RecordClassButton, null);
+        UpdateSettingsItemAlignment(expanded: true);
     }
 
     private void NavigationPaneClosing(NavigationView sender, NavigationViewPaneClosingEventArgs args)
@@ -150,6 +154,19 @@ public sealed partial class MainWindow : Window, IAppNavigator
             FontSize = 16
         };
         ToolTipService.SetToolTip(RecordClassButton, "Record a class");
+        UpdateSettingsItemAlignment(expanded: false);
+    }
+
+    private void UpdateSettingsItemAlignment(bool expanded)
+    {
+        if (NavigationRoot.SettingsItem is NavigationViewItem settingsItem)
+        {
+            settingsItem.Width = expanded ? 128 : double.NaN;
+            settingsItem.HorizontalAlignment = expanded
+                ? HorizontalAlignment.Center
+                : HorizontalAlignment.Stretch;
+            settingsItem.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        }
     }
 
     private void RecordClassClicked(object sender, RoutedEventArgs args) => ShowJoin();
