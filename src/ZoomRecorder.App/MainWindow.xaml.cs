@@ -16,6 +16,7 @@ using ZoomRecorder.Core.Library;
 using ZoomRecorder.Core.Meetings;
 using ZoomRecorder.Core.Ports;
 using ZoomRecorder.Core.Processing;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Windows.Storage.Pickers;
 
@@ -23,6 +24,8 @@ namespace ZoomRecorder.App;
 
 public sealed partial class MainWindow : Window, IAppNavigator
 {
+    private const int DwmWindowAttributeBorderColor = 34;
+
     private readonly NativeSession _nativeSession;
     private readonly ExternalZoomJoinFlow _joinFlow;
     private Task<LibraryContext?> _libraryInitialization;
@@ -401,8 +404,29 @@ public sealed partial class MainWindow : Window, IAppNavigator
             PickFolderAsync);
     }
 
-    private void ApplyNightMode(bool enabled) =>
+    private void ApplyNightMode(bool enabled)
+    {
         NavigationRoot.RequestedTheme = enabled ? ElementTheme.Dark : ElementTheme.Light;
+        ApplyWindowFrameColor(enabled);
+    }
+
+    private void ApplyWindowFrameColor(bool nightModeEnabled)
+    {
+        // DWM uses COLORREF (0x00BBGGRR). Keep its one-pixel frame/separator in sync with the app shell.
+        var color = nightModeEnabled ? 0x00101010u : 0x00E7E7E7u;
+        _ = DwmSetWindowAttribute(
+            WindowNative.GetWindowHandle(this),
+            DwmWindowAttributeBorderColor,
+            ref color,
+            Marshal.SizeOf<uint>());
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(
+        nint windowHandle,
+        int attribute,
+        ref uint attributeValue,
+        int attributeSize);
 
     private async Task<string?> PickFolderAsync()
     {
