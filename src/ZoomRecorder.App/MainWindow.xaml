@@ -23,7 +23,7 @@
         SelectionChanged="NavigationSelectionChanged"
         BackRequested="NavigationBackRequested"
         PaneOpened="NavigationPaneOpened"
-        PaneClosed="NavigationPaneClosed">
+        PaneClosing="NavigationPaneClosing">
         <NavigationView.Resources>
             <ResourceDictionary>
                 <ResourceDictionary.ThemeDictionaries>

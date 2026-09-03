@@ -142,7 +142,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
         ToolTipService.SetToolTip(RecordClassButton, null);
     }
 
-    private void NavigationPaneClosed(NavigationView sender, object args)
+    private void NavigationPaneClosing(NavigationView sender, NavigationViewPaneClosingEventArgs args)
     {
         RecordClassButton.Content = new FontIcon
         {
