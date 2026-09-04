@@ -19,10 +19,9 @@
         x:Name="NavigationRoot"
         Loaded="NavigationRootLoaded"
         PaneDisplayMode="Left"
-        IsBackButtonVisible="Visible"
+        IsBackButtonVisible="Collapsed"
         IsSettingsVisible="True"
         SelectionChanged="NavigationSelectionChanged"
-        BackRequested="NavigationBackRequested"
         PaneOpening="NavigationPaneOpening"
         PaneClosing="NavigationPaneClosing">
         <NavigationView.Resources>

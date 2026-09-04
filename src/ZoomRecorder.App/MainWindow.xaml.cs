@@ -31,7 +31,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private Task<LibraryContext?> _libraryInitialization;
     private LibraryShellViewModel? _shellViewModel;
     private int _navigationRequest;
-    private bool _classDetailActive;
     private bool _suppressNavigationSelection;
 
     private const string LibraryUnavailableMessage =
@@ -125,14 +124,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
             case "recordings":
                 NavigateRecordings();
                 break;
-        }
-    }
-
-    private void NavigationBackRequested(NavigationView sender, NavigationViewBackRequestedEventArgs args)
-    {
-        if (_classDetailActive)
-        {
-            NavigateClasses();
         }
     }
 
@@ -312,8 +303,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void OpenClass(ClassCardViewModel classCard)
     {
         var request = BeginLibraryNavigation(LibraryDestination.Classes, ClassesNavigationItem);
-        _classDetailActive = true;
-        NavigationRoot.IsBackEnabled = true;
         _ = LoadClassDetailAsync(request, classCard.Id);
     }
 
@@ -345,8 +334,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void OpenLecture(RecordingListItem item)
     {
         var request = ++_navigationRequest;
-        _classDetailActive = true;
-        NavigationRoot.IsBackEnabled = true;
         _ = LoadLectureAsync(request, item.Recording);
     }
 
@@ -379,8 +366,6 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private void NavigateClassById(Guid classId)
     {
         var request = BeginLibraryNavigation(LibraryDestination.Classes, ClassesNavigationItem);
-        _classDetailActive = true;
-        NavigationRoot.IsBackEnabled = true;
         _ = LoadClassDetailAsync(request, classId);
     }
 
@@ -504,10 +489,8 @@ public sealed partial class MainWindow : Window, IAppNavigator
     private int BeginLibraryNavigation(LibraryDestination destination, NavigationViewItem? navigationItem)
     {
         var request = ++_navigationRequest;
-        _classDetailActive = false;
         _shellViewModel?.Navigate(destination);
         SetNavigationVisible(true);
-        NavigationRoot.IsBackEnabled = false;
         if (navigationItem is not null)
         {
             _suppressNavigationSelection = true;
@@ -524,9 +507,7 @@ public sealed partial class MainWindow : Window, IAppNavigator
     {
         NavigationRoot.IsPaneVisible = visible;
         NavigationRoot.IsPaneToggleButtonVisible = visible;
-        NavigationRoot.IsBackButtonVisible = visible
-            ? NavigationViewBackButtonVisible.Visible
-            : NavigationViewBackButtonVisible.Collapsed;
+        NavigationRoot.IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed;
         if (visible)
         {
             _shellViewModel?.Navigate(_shellViewModel.CurrentDestination == LibraryDestination.Meeting
