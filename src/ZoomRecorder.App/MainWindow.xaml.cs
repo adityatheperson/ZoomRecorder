@@ -161,11 +161,31 @@ public sealed partial class MainWindow : Window, IAppNavigator
     {
         if (NavigationRoot.SettingsItem is NavigationViewItem settingsItem)
         {
-            settingsItem.Width = expanded ? 128 : double.NaN;
-            settingsItem.HorizontalAlignment = expanded
-                ? HorizontalAlignment.Center
-                : HorizontalAlignment.Stretch;
-            settingsItem.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            settingsItem.Width = double.NaN;
+            settingsItem.HorizontalAlignment = HorizontalAlignment.Stretch;
+            if (expanded)
+            {
+                settingsItem.Icon = null;
+                settingsItem.Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 12,
+                    Children =
+                    {
+                        new FontIcon { Glyph = "\uE713", FontSize = 16 },
+                        new TextBlock { Text = "Settings", VerticalAlignment = VerticalAlignment.Center }
+                    }
+                };
+                settingsItem.Padding = new Thickness(0, 0, NavigationRoot.CompactPaneLength, 0);
+                settingsItem.HorizontalContentAlignment = HorizontalAlignment.Center;
+            }
+            else
+            {
+                settingsItem.Icon = new FontIcon { Glyph = "\uE713", FontSize = 16 };
+                settingsItem.Content = "Settings";
+                settingsItem.Padding = new Thickness(0);
+                settingsItem.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            }
         }
     }
 
