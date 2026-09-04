@@ -11,6 +11,7 @@ public sealed partial class RecordingsPage : Page
     private readonly Func<RecordingRecord, CancellationToken, Task<bool>>? _assignment;
     private readonly Func<RecordingRecord, CancellationToken, Task>? _deletion;
     private readonly Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>>? _rename;
+    private readonly Action<RecordingRecord>? _openVideo;
     private readonly Action _recordClass;
     private readonly Func<Task> _retry;
 
@@ -21,13 +22,15 @@ public sealed partial class RecordingsPage : Page
         Func<Task> retry,
         bool isLoading = false,
         Func<RecordingRecord, CancellationToken, Task>? deletion = null,
-        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>>? rename = null)
+        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>>? rename = null,
+        Action<RecordingRecord>? openVideo = null)
     {
         InitializeComponent();
         _viewModel = viewModel;
         _assignment = assignment;
         _deletion = deletion;
         _rename = rename;
+        _openVideo = openVideo;
         _recordClass = recordClass ?? throw new ArgumentNullException(nameof(recordClass));
         _retry = retry ?? throw new ArgumentNullException(nameof(retry));
         DataContext = viewModel;
@@ -160,6 +163,29 @@ public sealed partial class RecordingsPage : Page
         finally
         {
             renameButton.IsEnabled = true;
+        }
+    }
+
+    private async void OpenVideoClicked(object sender, RoutedEventArgs args)
+    {
+        if (_openVideo is null || ((FrameworkElement)sender).DataContext is not RecordingListItem item)
+        {
+            return;
+        }
+
+        try
+        {
+            _openVideo(item.Recording);
+        }
+        catch (Exception)
+        {
+            await new ContentDialog
+            {
+                Title = "Could not open recording",
+                Content = $"Windows could not open {item.FileName}. Check that the file still exists and that an MP4 player is installed.",
+                CloseButtonText = "OK",
+                XamlRoot = XamlRoot
+            }.ShowAsync();
         }
     }
 

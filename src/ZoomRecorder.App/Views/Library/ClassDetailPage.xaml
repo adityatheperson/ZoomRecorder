@@ -65,6 +65,7 @@
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel>
                                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -72,7 +73,8 @@
                                         </StackPanel>
                                         <TextBlock Grid.Column="1" Text="{x:Bind DurationText}" VerticalAlignment="Center" />
                                         <Button Grid.Column="2" Content="Rename" Click="RenameClicked" VerticalAlignment="Center" />
-                                        <Button Grid.Column="3" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center"
+                                        <Button Grid.Column="3" Content="Open video" Click="OpenVideoClicked" VerticalAlignment="Center" />
+                                        <Button Grid.Column="4" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center"
                                                 Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                                     </Grid>
                                 </DataTemplate>

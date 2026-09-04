@@ -76,6 +76,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Spacing="3">
                             <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
@@ -90,7 +91,8 @@
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <Button Grid.Column="3" Content="Assign to class" Click="AssignClicked" VerticalAlignment="Center" />
                         <Button Grid.Column="4" Content="Rename" Click="RenameClicked" VerticalAlignment="Center" />
-                        <Button Grid.Column="5" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center" Foreground="#FFC42B1C" />
+                        <Button Grid.Column="5" Content="Open video" Click="OpenVideoClicked" VerticalAlignment="Center" />
+                        <Button Grid.Column="6" Content="Delete" Click="DeleteClicked" VerticalAlignment="Center" Foreground="#FFC42B1C" />
                     </Grid>
                 </DataTemplate>
             </ListView.ItemTemplate>

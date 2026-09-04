@@ -303,7 +303,9 @@ public sealed partial class MainWindow : Window, IAppNavigator
                 deletion: (recording, cancellationToken) =>
                     _recordingDeletion.DeleteAsync(recording.Id, cancellationToken),
                 rename: (recording, name, cancellationToken) =>
-                    _recordingRename.RenameAsync(recording.Id, name, cancellationToken));
+                    _recordingRename.RenameAsync(recording.Id, name, cancellationToken),
+                openVideo: recording =>
+                    LocalFileActions.Open(recording.FilePath, _services.Paths.RecordingsRoot));
         }
     }
 
@@ -335,7 +337,8 @@ public sealed partial class MainWindow : Window, IAppNavigator
                 (recording, cancellationToken) =>
                     _recordingDeletion.DeleteAsync(recording.Id, cancellationToken),
                 (recording, name, cancellationToken) =>
-                    _recordingRename.RenameAsync(recording.Id, name, cancellationToken));
+                    _recordingRename.RenameAsync(recording.Id, name, cancellationToken),
+                recording => LocalFileActions.Open(recording.FilePath, _services.Paths.RecordingsRoot));
         }
     }
 

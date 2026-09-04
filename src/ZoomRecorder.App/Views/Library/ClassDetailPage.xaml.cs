@@ -13,6 +13,7 @@ public sealed partial class ClassDetailPage : Page
     private readonly Action<RecordingListItem> _openLecture;
     private readonly Func<RecordingRecord, CancellationToken, Task> _deletion;
     private readonly Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> _rename;
+    private readonly Action<RecordingRecord>? _openVideo;
 
     public ClassDetailPage(
         ClassDetailViewModel viewModel,
@@ -20,7 +21,8 @@ public sealed partial class ClassDetailPage : Page
         Action recordClass,
         Action<RecordingListItem> openLecture,
         Func<RecordingRecord, CancellationToken, Task> deletion,
-        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> rename)
+        Func<RecordingRecord, string, CancellationToken, Task<RecordingRecord>> rename,
+        Action<RecordingRecord>? openVideo = null)
     {
         InitializeComponent();
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
@@ -29,6 +31,7 @@ public sealed partial class ClassDetailPage : Page
         _openLecture = openLecture ?? throw new ArgumentNullException(nameof(openLecture));
         _deletion = deletion ?? throw new ArgumentNullException(nameof(deletion));
         _rename = rename ?? throw new ArgumentNullException(nameof(rename));
+        _openVideo = openVideo;
         DataContext = viewModel;
         UpdateLectureState();
     }
@@ -56,6 +59,35 @@ public sealed partial class ClassDetailPage : Page
 
     private void BackClicked(object sender, RoutedEventArgs args) => _back();
     private void RecordClassClicked(object sender, RoutedEventArgs args) => _recordClass();
+
+    private async void OpenVideoClicked(object sender, RoutedEventArgs args)
+    {
+        if (_openVideo is null || ((FrameworkElement)sender).DataContext is not RecordingListItem item)
+        {
+            return;
+        }
+
+        try
+        {
+            _openVideo(item.Recording);
+        }
+        catch (Exception)
+        {
+            await ShowOpenVideoErrorAsync(item.FileName);
+        }
+    }
+
+    private async Task ShowOpenVideoErrorAsync(string fileName)
+    {
+        await new ContentDialog
+        {
+            Title = "Could not open recording",
+            Content = $"Windows could not open {fileName}. Check that the file still exists and that an MP4 player is installed.",
+            CloseButtonText = "OK",
+            XamlRoot = XamlRoot
+        }.ShowAsync();
+    }
+
     private void LectureClicked(object sender, ItemClickEventArgs args)
     {
         if (args.ClickedItem is RecordingListItem lecture && !_viewModel.IsDeleting(lecture.Id))
